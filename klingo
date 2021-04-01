@@ -1,9 +1,11 @@
+#!/usr/bin/env python
 import clingo
 import argparse
 
 # GLOBAL PARAMS:
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 k = 0
+clingo_output = False
 dictionary = False
 debug = False
 prg = clingo.Control()
@@ -29,11 +31,15 @@ class Propagator:
     def check(self,ctl):
         if debug: print("Current depth = ", ctl.assignment.decision_level-1)
 
-        if (ctl.assignment.decision_level == k+1) or ((ctl.assignment.is_total) and (ctl.assignment.decision_level < k+1)):
-            print("3ND-valuation found:")
+        if (ctl.assignment.decision_level == k+1) or (ctl.assignment.is_total):
+            
+            print("Valuation found:")
+            
             for i in range(len(self.solver_literals)):
-                print("V("+str(self.symbols[i])+") = "+translateTruthValue(ctl.assignment.value(self.solver_literals[i])))
-            print("--------------------------------")
+                if (not clingo_output): print("V("+str(self.symbols[i])+") = "+translateTruthValue(ctl.assignment.value(self.solver_literals[i])))
+                else:
+                    if (ctl.assignment.value(self.solver_literals[i])): print(str(self.symbols[i]),end=" ")
+                    elif (ctl.assignment.value(self.solver_literals[i])==None): print("?"+str(self.symbols[i]),end=" ")
             prg.interrupt()
 
 if __name__=="__main__":
@@ -41,18 +47,28 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("file", type=str, help="path to lp file")
     parser.add_argument("-k", "--depth", type=int, help="depth of reasoner (default=0)", default=0)
+    parser.add_argument("-o", "--clingo-output", help="enables clingo-style output", action="store_true")
     parser.add_argument("--dictionary", help="display the dictionary", action="store_true")
     parser.add_argument("--debug", help="display debug information", action="store_true")
     args = parser.parse_args()
     k = args.depth
+    clingo_output = args.clingo_output
     if args.debug: DEBUG = True
     if args.dictionary: DICTIONARY = True
     
     print("k-lingo version",__version__)
     print("Reading from",args.file)
-    print("Running with k =",args.depth,"\n")
+    print("Solving with k =",args.depth,"...\n")
+    
+    # ---------------------------------------
     
     prg.register_propagator(Propagator())
     prg.load(args.file)
     prg.ground([("base", [])])
-    prg.solve(on_model=lambda m: None)
+    solve_result = prg.solve(on_model=lambda m: None)
+    if solve_result.unsatisfiable:
+        print("\nUNSATISFIABLE")
+    elif solve_result.satisfiable:
+        print("\n"+str(k)+"-DEPTH SATISFIABLE (info: total assignment found)")
+    else:
+        print("\n"+str(k)+"-DEPTH SATISFIABLE")
