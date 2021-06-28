@@ -1,4 +1,4 @@
-# k-lingo 0.0.2
+# k-lingo 0.0.3
 
 #### REQUIREMENTS
 
@@ -10,12 +10,16 @@ You must grant k-lingo execution permission with `chmod +x klingo`. Then, you ca
 
 #### CHANGELOG:
 
+**v0.0.3**:
+
+- Klingo now outputs the number of atoms and bottoms in the 3ND\*-valuation.
+
 **v0.0.2**:
 
 - README created
 - Added options to control output format
 - Output now clearly states when the input logic program is unsatisfisable
-- Output now clearly states if the found 3ND*-valuation is total
+- Output now clearly states if the found 3ND\*-valuation is total
 
 **v0.0.1**:
 
