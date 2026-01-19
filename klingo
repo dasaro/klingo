@@ -1,87 +1,239 @@
 #!/usr/bin/env python3
 
-import clingo
 import argparse
 import time
+from itertools import cycle
+
+import clingo
 
 start_time = time.time()
 
 # GLOBAL PARAMS:
-__version__ = "0.2"
+__version__ = "1.0.0"
 k = 0
 clingo_output = False
-bot_atoms = 0
-tot_atoms = 0
 DEBUG = False
 DICTIONARY = False
-prg = clingo.Control(['-Wno-atom-undefined'])
+
+CURRENT_CONTROL = None
+RESTART_STRATEGIES = {
+    "luby": "L,60",
+    "geometric": "x,100,1.5",
+    "dynamic": "D,100,0.7",
+    "fixed": "F,100",
+    "none": "0",
+}
 
 # Helper function for clingo-style output
 def truthValueToString(val):
-    if val==True: return "1"
-    elif val==False: return "0"
-    elif val==None: return "?"
+    if val is True:
+        return "1"
+    if val is False:
+        return "0"
+    return "?"
+
 
 class Propagator:
+    def __init__(self, depth):
+        self.depth = depth
+        self.solver_literals = []
+        self.symbols = []
+        self.found = False
+        self.valuation = None
+        self.decision_level = None
+        self.exceeded_depth = False
 
     def init(self, init):
         init.check_mode = clingo.PropagatorCheckMode.Fixpoint
-        self.solver_literals = []
-        self.symbols = []
 
         for atom in init.symbolic_atoms:
             init.add_watch(init.solver_literal(atom.literal))
             self.solver_literals.append(init.solver_literal(atom.literal))
             self.symbols.append(atom.symbol)
-            if DICTIONARY: print(atom.symbol,"has solver literal",init.solver_literal(atom.literal))
-        
+            if DICTIONARY:
+                print(atom.symbol, "has solver literal", init.solver_literal(atom.literal))
 
-    def check(self,ctl):
-        global bot_atoms
-        global tot_atoms
+    def check(self, ctl):
+        if DEBUG:
+            print("Current depth = ", ctl.assignment.decision_level - 1)
 
-        if DEBUG: print("Current depth = ", ctl.assignment.decision_level-1)
+        if ctl.assignment.decision_level > self.depth + 1:
+            self.exceeded_depth = True
+            if CURRENT_CONTROL:
+                CURRENT_CONTROL.interrupt()
+            return
 
-        if (ctl.assignment.decision_level == k+1) or (ctl.assignment.is_total):
-            
-            print("Valuation found:")
+        if (ctl.assignment.decision_level == self.depth + 1) or (ctl.assignment.is_total):
+            self.valuation = []
             for i in range(len(self.solver_literals)):
                 truth_value = truthValueToString(ctl.assignment.value(self.solver_literals[i]))
-                if truth_value=="?": bot_atoms = bot_atoms + 1
-                tot_atoms = tot_atoms + 1
+                self.valuation.append((str(self.symbols[i]), truth_value))
+            self.found = True
+            self.decision_level = ctl.assignment.decision_level
+            if CURRENT_CONTROL:
+                CURRENT_CONTROL.interrupt()
 
-                if (not clingo_output): print("V("+str(self.symbols[i])+") = "+truth_value)
-                else:
-                    if ( truth_value=="1" ): print(str(self.symbols[i]), end=" ")
-                    elif ( truth_value=="?" ): print("?"+str(self.symbols[i]), end=" ")
 
-            prg.interrupt()
+def configure_solver(control, restart_key):
+    if restart_key not in RESTART_STRATEGIES:
+        raise ValueError(f"Unknown restart strategy: {restart_key}")
+    control.configuration.solver[0].restarts = RESTART_STRATEGIES[restart_key]
 
-if __name__=="__main__":
-    
+
+def valuation_signature(valuation):
+    return tuple(valuation)
+
+
+def valuation_block_constraint(valuation):
+    literals = []
+    for atom, value in valuation:
+        if value == "1":
+            literals.append(atom)
+        elif value == "0":
+            literals.append(f"not {atom}")
+    if not literals:
+        return None
+    return ":- " + ", ".join(literals) + "."
+
+
+def print_valuation(valuation, idx, depth, strategy):
+    bot_atoms = 0
+    tot_atoms = 0
+    print(f"\nValuation {idx} (k={depth}, restart={strategy}):")
+    if not clingo_output:
+        for atom, value in valuation:
+            if value == "?":
+                bot_atoms += 1
+            tot_atoms += 1
+            print(f"V({atom}) = {value}")
+    else:
+        for atom, value in valuation:
+            if value == "1":
+                print(atom, end=" ")
+            elif value == "?":
+                print("?" + atom, end=" ")
+            if value == "?":
+                bot_atoms += 1
+            tot_atoms += 1
+        print()
+
+    print("\n" + str(depth) + "-DEPTH SATISFIABLE")
+    print("\nAtoms        : " + str(tot_atoms))
+    print("Bottoms      : " + str(bot_atoms))
+
+
+if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
     parser.add_argument("file", type=str, help="path to lp file")
     parser.add_argument("-k", "--depth", type=int, help="depth of reasoner (default=0)", default=0)
     parser.add_argument("-o", "--clingo-output", help="enables clingo-style output", action="store_true")
     parser.add_argument("--dictionary", help="display the dictionary", action="store_true")
     parser.add_argument("--debug", help="display debug information", action="store_true")
+    parser.add_argument(
+        "--restart-strategy",
+        type=str,
+        default="luby",
+        help="restart strategy (luby, geometric, dynamic, fixed, none). Use comma-separated values to cycle.",
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="all",
+        choices=["all", "brave", "cautious"],
+        help="output mode: all valuations, brave (true in some), cautious (true in all).",
+    )
+    parser.add_argument(
+        "--max-valuations",
+        type=int,
+        default=0,
+        help="stop after N valuations (0 = no limit)",
+    )
     args = parser.parse_args()
     k = args.depth
     clingo_output = args.clingo_output
-    if args.debug: DEBUG = True
-    if args.dictionary: DICTIONARY = True
-    
-    print("k-lingo version",__version__)
-    print("Reading from",args.file)
-    print("Solving with k =",args.depth,"...\n")
-    
+    if args.debug:
+        DEBUG = True
+    if args.dictionary:
+        DICTIONARY = True
+
+    print("k-lingo version", __version__)
+    print("Reading from", args.file)
+    print("Solving with k =", args.depth, "...\n")
+
     # ---------------------------------------
-    
-    prg.register_propagator(Propagator())
-    prg.load(args.file)
-    prg.ground([("base", [])])
-    solve_result = prg.solve(on_model=lambda m: None)
-    if solve_result.unsatisfiable:
-        print("\nUNSATISFIABLE")
-    else:
-        print("\n"+str(k)+"-DEPTH SATISFIABLE\n\nAtoms        : "+str(tot_atoms)+"\nBottoms      : "+str(bot_atoms)+"\nTime         : {:.2f}".format(time.time() - start_time)+"s")
+
+    restart_keys = [key.strip() for key in args.restart_strategy.split(",") if key.strip()]
+    for key in restart_keys:
+        if key not in RESTART_STRATEGIES:
+            raise SystemExit(f"Unknown restart strategy: {key}")
+
+    restart_cycle = cycle(restart_keys)
+    seen = set()
+    blocking_constraints = []
+    valuation_index = 0
+    valuation_true_sets = []
+
+    while True:
+        strategy = next(restart_cycle)
+        CURRENT_CONTROL = clingo.Control(["-Wno-atom-undefined"])
+        configure_solver(CURRENT_CONTROL, strategy)
+        propagator = Propagator(k)
+        CURRENT_CONTROL.register_propagator(propagator)
+        CURRENT_CONTROL.load(args.file)
+        if blocking_constraints:
+            CURRENT_CONTROL.add("blocks", [], "\n".join(blocking_constraints))
+        CURRENT_CONTROL.ground([("base", [])])
+        if blocking_constraints:
+            CURRENT_CONTROL.ground([("blocks", [])])
+
+        solve_result = CURRENT_CONTROL.solve(on_model=lambda m: None)
+
+        if propagator.exceeded_depth:
+            raise SystemExit("Search exceeded k-depth; aborting.")
+
+        if not propagator.found:
+            if solve_result.unsatisfiable and valuation_index == 0:
+                print("\nUNSATISFIABLE")
+            break
+
+        signature = valuation_signature(propagator.valuation)
+        if signature in seen:
+            block = valuation_block_constraint(propagator.valuation)
+            if not block or block in blocking_constraints:
+                print("\nNo new blocking constraint for a repeated valuation; stopping to avoid loops.")
+                break
+            blocking_constraints.append(block)
+            continue
+
+        valuation_index += 1
+        seen.add(signature)
+        true_atoms = {atom for atom, value in propagator.valuation if value == "1"}
+        valuation_true_sets.append(true_atoms)
+        if args.mode == "all":
+            print_valuation(propagator.valuation, valuation_index, k, strategy)
+        block = valuation_block_constraint(propagator.valuation)
+        if block:
+            if block not in blocking_constraints:
+                blocking_constraints.append(block)
+        else:
+            print("\nNo defined literals to block this valuation; stopping.")
+            break
+
+        if args.max_valuations > 0 and valuation_index >= args.max_valuations:
+            break
+
+    print("\nTime         : {:.2f}".format(time.time() - start_time) + "s")
+
+    if args.mode in {"brave", "cautious"} and valuation_true_sets:
+        if args.mode == "brave":
+            atoms = set().union(*valuation_true_sets)
+            label = "Brave consequences"
+        else:
+            atoms = set.intersection(*valuation_true_sets)
+            label = "Cautious consequences"
+        print(f"\n{label} (k={k}):")
+        if atoms:
+            print(" ".join(sorted(atoms)))
+        else:
+            print("(none)")
