@@ -1,14 +1,62 @@
 # k-lingo 0.0.3
 
-#### REQUIREMENTS
+## Overview
+k-lingo is a Python-based tool that runs a clingo propagator to compute k-depth 3ND*-valuations for logic programs.
 
-k-lingo was implemented and tested on an Apple M1 Macbook Pro with a python-enabled clingo 5.4.0 and Python 3.7.4. You may find more information on how to install python-enabled clingo at the official website https://potassco.org/clingo/. We recommend using the anaconda python distribution, downloadable from https://www.anaconda.com/products/individual#Download.
+## Requirements
+- Python 3 (tested with 3.7.x and 3.9.x).
+- A Python-enabled `clingo` installation (see https://potassco.org/clingo/).
+- macOS users can use Anaconda or Homebrew Python; see `how_to_run_klingo.txt` for an example path.
 
-#### USAGE
+## Installation
+No packaging is required. Clone the repo and ensure the script is executable:
 
-You must grant k-lingo execution permission with `chmod +x klingo`. Then, you can test k-lingo with one of the pre-defined examples in the `Examples` folder by running e.g. `./klingo -k <depth> Examples/example1.lp`.
+```sh
+chmod +x klingo
+```
 
-#### CHANGELOG:
+## Usage
+Run against a `.lp` program:
+
+```sh
+./klingo -k <depth> Examples/example1.lp
+```
+
+Common flags:
+- `-k, --depth`: reasoning depth (default: 0).
+- `-o, --clingo-output`: output only true/undefined atoms in clingo style.
+- `--dictionary`: print the solver literal mapping.
+- `--debug`: print debug information.
+
+If `./klingo` is not on your PATH, use:
+
+```sh
+python3 klingo -k 0 Examples/example2.lp
+```
+
+## Example Runs
+Small sanity checks (run locally):
+
+```sh
+python3 klingo -k 0 Examples/example1.lp
+python3 klingo -k 1 Examples/example1.lp
+python3 klingo -k 1 Examples/mini_sudoku.lp
+```
+
+Notes:
+- `example1.lp` is SAT at depth 0 with undefined atoms, and becomes total at depth 1.
+- `mini_sudoku.lp` is SAT at depth 1 and returns a partial valuation with some bottoms.
+
+## Output Format
+The tool prints each atom with its truth value:
+- `1` for true, `0` for false, `?` for undefined.
+At the end, it prints satisfiability, atom counts, and elapsed time.
+
+## Project Layout
+- `klingo`: main executable script.
+- `Examples/`: sample `.lp` programs for validation.
+
+## CHANGELOG
 
 **v0.0.3**:
 
