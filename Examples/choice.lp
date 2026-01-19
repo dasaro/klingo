@@ -1,1 +1,1 @@
-{ a; b; c; d }.
+% Theoryc :- -d.d :- -c.% Closed World Assumption-c :- not c.-d :- not d.% Enforce classicality via cuts1{c;-c}1 :- cut(1).1{d;-d}1 :- cut(2).% Choose cutsk{ cut(1..2) }k.% Make branches% branch(i,1..@exp(2,i)) :- cut(i).
