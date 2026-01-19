@@ -61,6 +61,8 @@ python3 klingo -k 1 Examples/mini_sudoku.lp
 python3 klingo -k 1 --restart-strategy luby,geometric Examples/example1.lp
 python3 klingo -k 1 --mode brave Examples/example1.lp
 python3 klingo -k 1 --mode cautious Examples/example1.lp
+python3 klingo -k 1 --mode brave Examples/aba_example.lp
+python3 klingo -k 1 --mode cautious Examples/aba_example.lp
 ```
 
 Notes:
@@ -84,7 +86,7 @@ The tool prints each atom with its truth value:
 - `1` for true, `0` for false, `?` for undefined.
 At the end, it prints satisfiability, atom counts, and elapsed time.
 
-When `--clingo-output` is enabled, model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?`.
+When `--clingo-output` is enabled, model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).
 
 ## Computational Considerations
 - Runtime can be highly non-monotonic in `k`; intermediate depths may be slower than both low and high depths.

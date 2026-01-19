@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import sys
 import time
 from itertools import cycle
 
@@ -124,7 +125,10 @@ def print_valuation(valuation, idx, depth, strategy):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Compute k-depth 3ND* valuations for ASP programs.",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     parser.add_argument("file", type=str, help="path to lp file")
     parser.add_argument("-k", "--depth", type=int, help="depth of reasoner (default=0)", default=0)
     parser.add_argument("-o", "--clingo-output", help="enables clingo-style output", action="store_true")
@@ -148,6 +152,12 @@ if __name__ == "__main__":
         type=int,
         default=0,
         help="stop after N valuations (0 = no limit)",
+    )
+    parser.add_argument(
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="colorize ?atoms in clingo-style output (default: auto)",
     )
     args = parser.parse_args()
     k = args.depth
@@ -180,6 +190,13 @@ if __name__ == "__main__":
     valuation_true_sets = []
 
     solve_calls = 0
+    if args.color == "always":
+        colorize = True
+    elif args.color == "never":
+        colorize = False
+    else:
+        colorize = sys.stdout.isatty()
+
     while True:
         strategy = next(restart_cycle)
         CURRENT_CONTROL = clingo.Control(["-Wno-atom-undefined"])
@@ -229,7 +246,10 @@ if __name__ == "__main__":
                     if value == "1":
                         atoms.append(atom)
                     elif value == "?":
-                        atoms.append("?" + atom)
+                        if colorize:
+                            atoms.append("\033[90m?" + atom + "\033[0m")
+                        else:
+                            atoms.append("?" + atom)
                 print(" ".join(atoms))
             else:
                 print_valuation(propagator.valuation, valuation_index, k, strategy)
