@@ -157,9 +157,14 @@ if __name__ == "__main__":
     if args.dictionary:
         DICTIONARY = True
 
-    print("k-lingo version", __version__)
-    print("Reading from", args.file)
-    print("Solving with k =", args.depth, "...\n")
+    if clingo_output:
+        print("clingo version", clingo.__version__)
+        print("Reading from", args.file)
+        print("Solving...")
+    else:
+        print("k-lingo version", __version__)
+        print("Reading from", args.file)
+        print("Solving with k =", args.depth, "...\n")
 
     # ---------------------------------------
 
@@ -174,6 +179,7 @@ if __name__ == "__main__":
     valuation_index = 0
     valuation_true_sets = []
 
+    solve_calls = 0
     while True:
         strategy = next(restart_cycle)
         CURRENT_CONTROL = clingo.Control(["-Wno-atom-undefined"])
@@ -187,6 +193,7 @@ if __name__ == "__main__":
         if blocking_constraints:
             CURRENT_CONTROL.ground([("blocks", [])])
 
+        solve_calls += 1
         solve_result = CURRENT_CONTROL.solve(on_model=lambda m: None)
 
         if propagator.exceeded_depth:
@@ -194,14 +201,18 @@ if __name__ == "__main__":
 
         if not propagator.found:
             if solve_result.unsatisfiable and valuation_index == 0:
-                print("\nUNSATISFIABLE")
+                if clingo_output:
+                    print("UNSATISFIABLE")
+                else:
+                    print("\nUNSATISFIABLE")
             break
 
         signature = valuation_signature(propagator.valuation)
         if signature in seen:
             block = valuation_block_constraint(propagator.valuation)
             if not block or block in blocking_constraints:
-                print("\nNo new blocking constraint for a repeated valuation; stopping to avoid loops.")
+                if not clingo_output:
+                    print("\nNo new blocking constraint for a repeated valuation; stopping to avoid loops.")
                 break
             blocking_constraints.append(block)
             continue
@@ -211,19 +222,40 @@ if __name__ == "__main__":
         true_atoms = {atom for atom, value in propagator.valuation if value == "1"}
         valuation_true_sets.append(true_atoms)
         if args.mode == "all":
-            print_valuation(propagator.valuation, valuation_index, k, strategy)
+            if clingo_output:
+                print(f"Answer: {valuation_index}")
+                atoms = []
+                for atom, value in propagator.valuation:
+                    if value == "1":
+                        atoms.append(atom)
+                    elif value == "?":
+                        atoms.append("?" + atom)
+                print(" ".join(atoms))
+            else:
+                print_valuation(propagator.valuation, valuation_index, k, strategy)
         block = valuation_block_constraint(propagator.valuation)
         if block:
             if block not in blocking_constraints:
                 blocking_constraints.append(block)
         else:
-            print("\nNo defined literals to block this valuation; stopping.")
+            if not clingo_output:
+                print("\nNo defined literals to block this valuation; stopping.")
             break
 
         if args.max_valuations > 0 and valuation_index >= args.max_valuations:
             break
 
-    print("\nTime         : {:.2f}".format(time.time() - start_time) + "s")
+    elapsed = time.time() - start_time
+    if clingo_output:
+        status = "SATISFIABLE" if valuation_index > 0 else "UNSATISFIABLE"
+        if args.mode == "all":
+            print(status)
+        print(f"Models       : {valuation_index}")
+        print(f"Calls        : {solve_calls}")
+        print("Time         : {:.2f}s".format(elapsed))
+        print("CPU Time     : {:.2f}s".format(elapsed))
+    else:
+        print("\nTime         : {:.2f}".format(elapsed) + "s")
 
     if args.mode in {"brave", "cautious"} and valuation_true_sets:
         if args.mode == "brave":

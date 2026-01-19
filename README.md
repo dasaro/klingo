@@ -68,19 +68,23 @@ Notes:
 - `mini_sudoku.lp` is SAT at depth 1 and returns a partial valuation with some bottoms.
 
 ## Pretty-Printed Sudoku
-To render Sudoku grids without embedding formatting in `klingo`, use the helper script:
+To render Sudoku grids without embedding formatting in `klingo`, pipe its output to the helper formatter:
 
 ```sh
-python3 scripts/pretty_sudoku.py -k 6 Examples/sudoku.lp
-python3 scripts/pretty_sudoku.py -k 6 --mode cautious Examples/sudoku.lp
+python3 klingo -k 6 --clingo-output Examples/sudoku.lp | \\
+  python3 scripts/pretty_sudoku_from_klingo.py
+python3 klingo -k 6 --mode cautious --clingo-output Examples/sudoku.lp | \\
+  python3 scripts/pretty_sudoku_from_klingo.py
 ```
 
-This script calls `klingo` and formats `sudoku/3` atoms into a 9x9 grid with 3x3 boxes.
+The formatter reads from stdin and formats `sudoku/3` atoms into a 9x9 grid with 3x3 boxes.
 
 ## Output Format
 The tool prints each atom with its truth value:
 - `1` for true, `0` for false, `?` for undefined.
 At the end, it prints satisfiability, atom counts, and elapsed time.
+
+When `--clingo-output` is enabled, model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?`.
 
 ## Computational Considerations
 - Runtime can be highly non-monotonic in `k`; intermediate depths may be slower than both low and high depths.
@@ -90,7 +94,7 @@ At the end, it prints satisfiability, atom counts, and elapsed time.
 ## Project Layout
 - `klingo`: main executable script.
 - `Examples/`: sample `.lp` programs for validation.
-- `scripts/pretty_sudoku.py`: helper to render Sudoku grids.
+- `scripts/pretty_sudoku_from_klingo.py`: stdin formatter for Sudoku grids.
 - `scripts/install.sh`: optional installation helper.
 
 ## CHANGELOG
