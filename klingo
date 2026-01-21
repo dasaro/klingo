@@ -160,7 +160,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("file", type=str, help="path to lp file")
     parser.add_argument("-k", "--depth", type=int, help="depth of reasoner (default=0)", default=0)
-    parser.add_argument("-o", "--clingo-output", help="enables clingo-style output", action="store_true")
+    parser.add_argument(
+        "-o",
+        "--clingo-output",
+        help="enables clingo-style output",
+        action="store_true",
+        default=True,
+    )
+    parser.add_argument(
+        "--no-clingo-output",
+        dest="clingo_output",
+        action="store_false",
+        help="disables clingo-style output",
+    )
     parser.add_argument("--dictionary", help="display the dictionary", action="store_true")
     parser.add_argument("--debug", help="display debug information", action="store_true")
     parser.add_argument(
@@ -292,27 +304,20 @@ if __name__ == "__main__":
             all_atoms = {atom for atom, _value in filtered}
 
         if clingo_output:
-            print(f"Answer: {valuation_index}")
-            atoms = []
-            for atom, value in filtered:
-                if value == "1":
-                    atoms.append(atom)
-                elif value == "?":
-                    if colorize:
-                        atoms.append("\033[90m?" + atom + "\033[0m")
-                    else:
-                        atoms.append("?" + atom)
-            print(" ".join(atoms))
-
-            if args.mode in {"brave", "cautious"}:
-                total = len(all_atoms or [])
-                if args.mode == "brave":
-                    low = len(brave_union)
-                    high = total
-                else:
-                    low = 0
-                    high = len(cautious_intersection or [])
-                print(f"Consequences: [{low};{high}]")
+            if args.mode == "all":
+                print(f"Answer: {valuation_index}")
+                atoms = []
+                for atom, value in filtered:
+                    if value == "1":
+                        atoms.append(atom)
+                    elif value == "?":
+                        if colorize:
+                            atoms.append("\033[90m?" + atom + "\033[0m")
+                        else:
+                            atoms.append("?" + atom)
+                print(" ".join(atoms))
+            elif args.mode in {"brave", "cautious"}:
+                pass
         else:
             if args.mode == "all":
                 print_valuation(propagator.valuation, valuation_index, k, strategy)
@@ -336,20 +341,39 @@ if __name__ == "__main__":
     if clingo_output:
         status = "SATISFIABLE" if valuation_index > 0 else "UNSATISFIABLE"
         print(status)
-        models_suffix = "" if exhausted else "+"
-        print(f"Models       : {valuation_index}{models_suffix}")
-        if args.mode == "brave":
-            flag = "yes" if exhausted else "unknown"
-            print(f"  Brave      : {flag}")
-            cons = len(brave_union)
-            cons_suffix = "" if exhausted else "+"
-            print(f"Consequences : {cons}{cons_suffix}")
-        elif args.mode == "cautious":
-            flag = "yes" if exhausted else "unknown"
-            print(f"  Cautious   : {flag}")
-            cons = len(cautious_intersection or []) if exhausted else 0
-            cons_suffix = "" if exhausted else "+"
-            print(f"Consequences : {cons}{cons_suffix}")
+        if args.mode in {"brave", "cautious"}:
+            total = len(all_atoms or [])
+            if args.mode == "brave":
+                low = len(brave_union)
+                high = total
+            else:
+                low = 0
+                high = len(cautious_intersection or [])
+            print(f"Consequences [{low};{high}]")
+            if args.mode == "brave":
+                atoms = sorted(brave_union)
+            else:
+                atoms = sorted(cautious_intersection or set())
+            print(f"Answer: (Time: {elapsed:.3f}s)")
+            if atoms:
+                print(" ".join(atoms))
+            models_suffix = "" if exhausted else "+"
+            print(f"\nModels       : 1{models_suffix}")
+            if args.mode == "brave":
+                flag = "yes" if exhausted else "unknown"
+                print(f"  Brave      : {flag}")
+                cons = len(brave_union)
+                cons_suffix = "" if exhausted else "+"
+                print(f"Consequences : {cons}{cons_suffix}")
+            else:
+                flag = "yes" if exhausted else "unknown"
+                cons = len(cautious_intersection or []) if exhausted else 0
+                cons_suffix = "" if exhausted else "+"
+                print(f"  Cautious   : {flag}")
+                print(f"Consequences : {cons}{cons_suffix}")
+        else:
+            models_suffix = "" if exhausted else "+"
+            print(f"Models       : {valuation_index}{models_suffix}")
         print(f"Calls        : {solve_calls}")
         print("Time         : {:.2f}s".format(elapsed))
         print("CPU Time     : {:.2f}s".format(elapsed))

@@ -36,7 +36,8 @@ Run against a `.lp` program:
 
 Common flags:
 - `-k, --depth`: reasoning depth (default: 0).
-- `-o, --clingo-output`: output only true/undefined atoms in clingo style.
+- `-o, --clingo-output`: output only true/undefined atoms in clingo style (default).
+- `--no-clingo-output`: use the legacy k-lingo output format.
 - `--dictionary`: print the solver literal mapping.
 - `--debug`: print debug information.
 - `--restart-strategy`: restart policy (luby, geometric, dynamic, fixed, none). Provide a comma-separated list to cycle.
@@ -86,7 +87,7 @@ The tool prints each atom with its truth value:
 - `1` for true, `0` for false, `?` for undefined.
 At the end, it prints satisfiability, atom counts, and elapsed time.
 
-When `--clingo-output` is enabled, model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).\nIn brave/cautious mode, `-n` controls how many valuations contribute to consequences (mirroring clingo's `-n`).\nIf `#show pred/arity` directives are present, only those atoms are printed in clingo-style output.
+When `--clingo-output` is enabled (the default), model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).\nUse `--no-clingo-output` to print the legacy k-lingo format instead.\nIn brave/cautious mode, `-n` controls how many valuations contribute to consequences (mirroring clingo's `-n`).\nIf `#show pred/arity` directives are present, only those atoms are printed in clingo-style output.
 
 ## Computational Considerations
 - Runtime can be highly non-monotonic in `k`; intermediate depths may be slower than both low and high depths.
