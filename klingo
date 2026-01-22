@@ -99,25 +99,46 @@ def valuation_block_constraint(valuation):
     return ":- " + ", ".join(literals) + "."
 
 
-def print_valuation(valuation, idx, depth, strategy, bnm_atoms=None, colorize=False):
+def format_atom(atom, tag_map, colorize):
+    if atom not in tag_map:
+        return atom
+    tag = tag_map[atom]
+    if colorize:
+        color = {
+            "bnm": "\033[34m",
+            "heur": "\033[33m",
+            "confirm": "\033[32m",
+            "disconfirm": "\033[36m",
+        }[tag]
+        return f"{color}{atom}\033[0m"
+    prefix = {
+        "bnm": "[b]",
+        "heur": "[h]",
+        "confirm": "[c]",
+        "disconfirm": "[d]",
+    }[tag]
+    return f"{prefix}{atom}"
+
+
+def print_valuation(valuation, idx, depth, strategy, tag_map=None, colorize=False):
     bot_atoms = 0
     tot_atoms = 0
-    bnm_atoms = bnm_atoms or set()
+    tag_map = tag_map or {}
     print(f"\nValuation {idx} (k={depth}, restart={strategy}):")
     if not clingo_output:
         for atom, value in valuation:
             if value == "?":
                 bot_atoms += 1
             tot_atoms += 1
-            if colorize and atom in bnm_atoms:
-                print(f"V(\033[34m{atom}\033[0m) = {value}")
+            if atom in tag_map:
+                print(f"V({format_atom(atom, tag_map, colorize)}) = {value}")
             else:
                 print(f"V({atom}) = {value}")
     else:
         for atom, value in valuation:
             if value == "1":
-                if colorize and atom in bnm_atoms:
-                    print(f"\033[34m{atom}\033[0m", end=" ")
+                if atom in tag_map:
+                    print(format_atom(atom, tag_map, colorize), end=" ")
                 else:
                     print(atom, end=" ")
             elif value == "?":
@@ -132,21 +153,22 @@ def print_valuation(valuation, idx, depth, strategy, bnm_atoms=None, colorize=Fa
     print("Bottoms      : " + str(bot_atoms))
 
 
-def parse_show_signatures(path):
+def parse_show_signatures(paths):
     signatures = set()
     pattern = re.compile(r"#show\s+([A-Za-z_][A-Za-z0-9_]*)(?:/(\d+))?")
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-            text = handle.read()
-    except OSError:
-        return set()
-    for match in pattern.finditer(text):
-        name = match.group(1)
-        arity = match.group(2)
-        if arity is None:
-            signatures.add((name, 0))
-        else:
-            signatures.add((name, int(arity)))
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        for match in pattern.finditer(text):
+            name = match.group(1)
+            arity = match.group(2)
+            if arity is None:
+                signatures.add((name, 0))
+            else:
+                signatures.add((name, int(arity)))
     return signatures
 
 
@@ -172,7 +194,7 @@ def _collect_constants_from_term(term, constants):
                 _collect_constants_from_term(arg, constants)
 
 
-def _collect_signatures_constants(path):
+def _collect_signatures_constants(paths):
     signatures = set()
     constants = set()
 
@@ -207,7 +229,7 @@ def _collect_signatures_constants(path):
                     for arg in target.arguments:
                         _collect_constants_from_term(arg, constants)
 
-    clingo_ast.parse_files([path], visit)
+    clingo_ast.parse_files(paths, visit)
     return signatures, constants
 
 
@@ -226,8 +248,8 @@ def _cartesian_args(items, arity):
     return out
 
 
-def add_classical_totality(control, path):
-    signatures, constants = _collect_signatures_constants(path)
+def add_classical_totality(control, paths):
+    signatures, constants = _collect_signatures_constants(paths)
     if not signatures:
         return
     const_list = sorted(constants, key=str)
@@ -254,16 +276,14 @@ def _rewrite_body_literal_as_naf(lit):
         return lit
     if sym.operator_type != clingo_ast.UnaryOperator.Minus:
         return lit
+    if lit.sign != clingo_ast.Sign.NoSign:
+        return lit
     base = sym.argument
     new_atom = clingo_ast.SymbolicAtom(base)
-    if lit.sign == clingo_ast.Sign.NoSign:
-        new_sign = clingo_ast.Sign.Negation
-    else:
-        new_sign = lit.sign
-    return clingo_ast.Literal(lit.location, new_sign, new_atom)
+    return clingo_ast.Literal(lit.location, clingo_ast.Sign.Negation, new_atom)
 
 
-def add_default_completion_program(control, path):
+def add_default_completion_program(control, paths):
     with clingo_ast.ProgramBuilder(control) as builder:
         def on_ast(node):
             if node.ast_type == clingo_ast.ASTType.Rule:
@@ -271,16 +291,16 @@ def add_default_completion_program(control, path):
                 node = node.update(body=new_body)
             builder.add(node)
 
-        clingo_ast.parse_files([path], on_ast)
+        clingo_ast.parse_files(paths, on_ast)
 
 
 def _is_strong_negation(atom_str):
     return atom_str.startswith("-") and len(atom_str) > 1 and atom_str[1].isalpha()
 
 
-def _completion_union(path, valuation):
+def _completion_union(paths, valuation):
     control = clingo.Control(["-Wno-atom-undefined"])
-    add_default_completion_program(control, path)
+    add_default_completion_program(control, paths)
     lines = []
     for atom, value in valuation:
         if value == "1":
@@ -301,39 +321,81 @@ def _completion_union(path, valuation):
     return union
 
 
-def apply_default_completion(valuation, path):
+def apply_default_completion(valuation, base_paths, all_paths):
     undecided = [atom for atom, value in valuation if value == "?" and not _is_strong_negation(atom)]
     if not undecided:
-        return valuation, set()
-    union = _completion_union(path, valuation)
+        return valuation, set(), set()
+    union = _completion_union(all_paths, valuation)
     if not union:
-        return valuation, set()
+        return valuation, set(), set()
+    union_base = _completion_union(base_paths, valuation) if base_paths else set()
     index = {atom: idx for idx, (atom, _value) in enumerate(valuation)}
     updated = list(valuation)
-    changed = set()
+    bnm_base = set()
+    bnm_heur = set()
     for atom in undecided:
         neg_atom = "-" + atom
         has_pos = atom in union
         has_neg = neg_atom in union
+        has_pos_base = atom in union_base
+        has_neg_base = neg_atom in union_base
         if has_pos and not has_neg:
             idx = index.get(atom)
             if idx is not None:
                 updated[idx] = (atom, "1")
-                changed.add(atom)
+                if has_pos_base and not has_neg_base:
+                    bnm_base.add(atom)
+                else:
+                    bnm_heur.add(atom)
             neg_idx = index.get(neg_atom)
             if neg_idx is not None and updated[neg_idx][1] == "?":
                 updated[neg_idx] = (neg_atom, "0")
-                changed.add(neg_atom)
+                if has_pos_base and not has_neg_base:
+                    bnm_base.add(neg_atom)
+                else:
+                    bnm_heur.add(neg_atom)
         elif has_neg and not has_pos:
             idx = index.get(atom)
             if idx is not None:
                 updated[idx] = (atom, "0")
-                changed.add(atom)
+                if has_neg_base and not has_pos_base:
+                    bnm_base.add(atom)
+                else:
+                    bnm_heur.add(atom)
             neg_idx = index.get(neg_atom)
             if neg_idx is not None and updated[neg_idx][1] == "?":
                 updated[neg_idx] = (neg_atom, "1")
-                changed.add(neg_atom)
-    return updated, changed
+                if has_neg_base and not has_pos_base:
+                    bnm_base.add(neg_atom)
+                else:
+                    bnm_heur.add(neg_atom)
+    return updated, bnm_base, bnm_heur
+
+
+def _extract_heuristic_defaults(paths):
+    defaults = set()
+
+    def on_ast(node):
+        if node.ast_type != clingo_ast.ASTType.Rule:
+            return
+        if node.head.ast_type != clingo_ast.ASTType.Literal:
+            return
+        head = node.head
+        if head.atom.ast_type != clingo_ast.ASTType.SymbolicAtom:
+            return
+        if len(node.body) != 1:
+            return
+        body = node.body[0]
+        if body.sign != clingo_ast.Sign.Negation:
+            return
+        if body.atom.ast_type != clingo_ast.ASTType.SymbolicAtom:
+            return
+        defaults.add(str(head.atom.symbol))
+
+    if not paths:
+        return defaults
+    clingo_ast.parse_files(paths, on_ast)
+    return defaults
 
  
 
@@ -354,7 +416,7 @@ if __name__ == "__main__":
         description="Compute k-depth 3ND* valuations for ASP programs.",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("file", type=str, help="path to lp file")
+    parser.add_argument("files", nargs="+", type=str, help="path(s) to base lp file(s)")
     parser.add_argument("-k", "--depth", type=int, help="depth of reasoner (default=0)", default=0)
     parser.add_argument(
         "-o",
@@ -416,6 +478,13 @@ if __name__ == "__main__":
         help="output mode: all valuations, brave (true in some), cautious (true in all).",
     )
     parser.add_argument(
+        "--heuristics",
+        action="append",
+        default=[],
+        metavar="FILE",
+        help="learned heuristics file (used for introspection and defaults)",
+    )
+    parser.add_argument(
         "--bnm",
         dest="bnm",
         action="store_true",
@@ -442,13 +511,14 @@ if __name__ == "__main__":
     if args.dictionary:
         DICTIONARY = True
 
+    all_paths = list(args.files) + list(args.heuristics)
     if clingo_output:
         print("klingo version", __version__)
-        print("Reading from", args.file)
+        print("Reading from", ", ".join(all_paths))
         print("Solving...")
     else:
         print("k-lingo version", __version__)
-        print("Reading from", args.file)
+        print("Reading from", ", ".join(all_paths))
         print("Solving with k =", args.depth, "...\n")
 
     # ---------------------------------------
@@ -459,14 +529,15 @@ if __name__ == "__main__":
             raise SystemExit(f"Unknown restart strategy: {key}")
 
     restart_cycle = cycle(restart_keys)
-    show_signatures = parse_show_signatures(args.file) if clingo_output else set()
+    show_signatures = parse_show_signatures(all_paths) if clingo_output else set()
     seen = set()
     blocking_constraints = []
     valuation_index = 0
     brave_union = set()
     cautious_intersection = None
     all_atoms = None
-    bnm_true_seen = set()
+    tag_map_for_summary = {}
+    legend_flags = set()
     exhausted = False
     hit_limit = False
 
@@ -484,9 +555,10 @@ if __name__ == "__main__":
         configure_solver(CURRENT_CONTROL, strategy)
         propagator = Propagator(k)
         CURRENT_CONTROL.register_propagator(propagator)
-        CURRENT_CONTROL.load(args.file)
+        for path in all_paths:
+            CURRENT_CONTROL.load(path)
         if args.classical or args.three_nd_mode == "classical" or args.bnm:
-            add_classical_totality(CURRENT_CONTROL, args.file)
+            add_classical_totality(CURRENT_CONTROL, all_paths)
         if blocking_constraints:
             CURRENT_CONTROL.add("blocks", [], "\n".join(blocking_constraints))
         parts = [("base", [])]
@@ -526,8 +598,24 @@ if __name__ == "__main__":
         base_valuation = propagator.valuation
         completed_valuation = base_valuation
         bnm_atoms = set()
+        bnm_atoms_heur = set()
+        heur_bias_atoms = _extract_heuristic_defaults(args.heuristics)
+        base_value_map = {atom: value for atom, value in base_valuation}
         if args.bnm:
-            completed_valuation, bnm_atoms = apply_default_completion(base_valuation, args.file)
+            completed_valuation, bnm_atoms, bnm_atoms_heur = apply_default_completion(
+                base_valuation, args.files, all_paths
+            )
+        tag_map = {}
+        for atom in bnm_atoms:
+            tag_map[atom] = "bnm"
+        for atom in bnm_atoms_heur:
+            tag_map[atom] = "heur"
+        for atom in heur_bias_atoms:
+            val = base_value_map.get(atom)
+            if val == "1":
+                tag_map[atom] = "confirm"
+            elif val == "0":
+                tag_map[atom] = "disconfirm"
         if clingo_output and show_signatures:
             filtered = []
             for atom, value in completed_valuation:
@@ -538,10 +626,15 @@ if __name__ == "__main__":
             filtered = list(completed_valuation)
 
         true_atoms = {atom for atom, value in filtered if value == "1"}
-        if bnm_atoms:
+        for atom, value in filtered:
+            if value == "?":
+                legend_flags.add("?")
+            if atom in tag_map:
+                legend_flags.add(tag_map[atom])
+        if tag_map:
             for atom, value in filtered:
-                if value == "1" and atom in bnm_atoms:
-                    bnm_true_seen.add(atom)
+                if value == "1" and atom in tag_map:
+                    tag_map_for_summary[atom] = tag_map[atom]
         brave_union |= true_atoms
         if cautious_intersection is None:
             cautious_intersection = set(true_atoms)
@@ -556,8 +649,8 @@ if __name__ == "__main__":
                 atoms = []
                 for atom, value in filtered:
                     if value == "1":
-                        if colorize and atom in bnm_atoms:
-                            atoms.append("\033[34m" + atom + "\033[0m")
+                        if atom in tag_map:
+                            atoms.append(format_atom(atom, tag_map, colorize))
                         else:
                             atoms.append(atom)
                     elif value == "?":
@@ -570,7 +663,7 @@ if __name__ == "__main__":
                 pass
         else:
             if args.mode == "all":
-                print_valuation(completed_valuation, valuation_index, k, strategy, bnm_atoms, colorize)
+                print_valuation(completed_valuation, valuation_index, k, strategy, tag_map, colorize)
         block = valuation_block_constraint(base_valuation)
         if block:
             if block not in blocking_constraints:
@@ -606,11 +699,11 @@ if __name__ == "__main__":
                 atoms = sorted(cautious_intersection or set())
             print(f"Answer: (Time: {elapsed:.3f}s)")
             if atoms:
-                if colorize and bnm_true_seen:
+                if tag_map_for_summary:
                     colored = []
                     for atom in atoms:
-                        if atom in bnm_true_seen:
-                            colored.append("\033[34m" + atom + "\033[0m")
+                        if atom in tag_map_for_summary:
+                            colored.append(format_atom(atom, tag_map_for_summary, colorize))
                         else:
                             colored.append(atom)
                     print(" ".join(colored))
@@ -650,11 +743,11 @@ if __name__ == "__main__":
             label = "Cautious consequences"
         print(f"\n{label} (k={k}):")
         if atoms:
-            if colorize and bnm_true_seen:
+            if tag_map_for_summary:
                 colored = []
                 for atom in sorted(atoms):
-                    if atom in bnm_true_seen:
-                        colored.append("\033[34m" + atom + "\033[0m")
+                    if atom in tag_map_for_summary:
+                        colored.append(format_atom(atom, tag_map_for_summary, colorize))
                     else:
                         colored.append(atom)
                 print(" ".join(colored))
@@ -662,3 +755,18 @@ if __name__ == "__main__":
                 print(" ".join(sorted(atoms)))
         else:
             print("(none)")
+
+    if legend_flags:
+        parts = []
+        if "?" in legend_flags:
+            parts.append("?=undefined")
+        if "bnm" in legend_flags:
+            parts.append("blue=bnm" if colorize else "[b]=bnm")
+        if "heur" in legend_flags:
+            parts.append("yellow=heur" if colorize else "[h]=heur")
+        if "confirm" in legend_flags:
+            parts.append("green=confirm" if colorize else "[c]=confirm")
+        if "disconfirm" in legend_flags:
+            parts.append("teal=disconfirm" if colorize else "[d]=disconfirm")
+        if parts:
+            print("Legend: " + ", ".join(parts))

@@ -28,10 +28,11 @@ export PATH="$PATH:/path/to/repo"
 ```
 
 ## Usage
-Run against a `.lp` program:
+Run against one or more `.lp` programs:
 
 ```sh
 ./klingo -k <depth> Examples/example1.lp
+./klingo -k <depth> Examples/example1.lp Examples/example2.lp
 ```
 
 Common flags:
@@ -44,6 +45,7 @@ Common flags:
 - `--3nd-star` / `--3nd*`: use 3ND* semantics (default). Note: `--3nd*` may need quoting in some shells.
 - `--3nd`: use classical 3ND semantics (enables totality).
 - `--bnm`: bounded non-monotonic completion on undecided atoms (paper logic). Implies `--3nd`.
+- `--heuristics FILE`: learned defaults file for introspection and transfer; can be passed multiple times.
 - `--restart-strategy`: restart policy (luby, geometric, dynamic, fixed, none). Provide a comma-separated list to cycle.
 - `--mode` / `--enum-mode`: output mode: all valuations, brave (true in some valuation), cautious (true in all valuations).
 - `-n, --models`: stop after N valuations (0 = enumerate all).
@@ -91,7 +93,7 @@ The tool prints each atom with its truth value:
 - `1` for true, `0` for false, `?` for undefined.
 At the end, it prints satisfiability, atom counts, and elapsed time.
 
-When `--clingo-output` is enabled (the default), model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).\nUse `--no-clingo-output` to print the legacy k-lingo format instead.\nIn brave/cautious mode, `-n` controls how many valuations contribute to consequences (mirroring clingo's `-n`).\nIf `#show pred/arity` directives are present, only those atoms are printed in clingo-style output.\nWith `--bnm`, undecided atoms may be completed to true or false if derivable under default negation; such completions are highlighted in blue when color is enabled.
+When `--clingo-output` is enabled (the default), model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).\nUse `--no-clingo-output` to print the legacy k-lingo format instead.\nIn brave/cautious mode, `-n` controls how many valuations contribute to consequences (mirroring clingo's `-n`).\nIf `#show pred/arity` directives are present, only those atoms are printed in clingo-style output.\nWith `--bnm`, undecided atoms may be completed to true or false if derivable under default negation. When color is enabled:\n- Blue marks standard non-monotonic completions from the core program.\n- Dark yellow marks completions due to the learned heuristics file.\n- Dark green marks confirmation: a learned default’s value is derived by the solver at this depth.\n- Teal marks disconfirmation: a learned default’s value is flipped by deeper reasoning.\nWhen color is disabled, atoms are prefixed with ASCII markers: `[b]`, `[h]`, `[c]`, `[d]` respectively.
 
 ## Computational Considerations
 - Runtime can be highly non-monotonic in `k`; intermediate depths may be slower than both low and high depths.
