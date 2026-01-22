@@ -1,4 +1,4 @@
-# k-lingo 1.0.0
+# k-lingo 1.0.1
 
 ## Overview
 k-lingo is a Python-based tool that runs a clingo propagator to compute k-depth 3ND*-valuations for logic programs.
@@ -107,6 +107,11 @@ When `--clingo-output` is enabled (the default), model output follows clingo's f
 - `scripts/install.sh`: optional installation helper.
 
 ## CHANGELOG
+
+**v1.0.1**:
+
+- Added heuristic transfer experiments and rule-level prototype.
+- Added Wason-like experimental runners and ILASP plan.
 
 **v1.0.0**:
 

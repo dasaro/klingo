@@ -12,7 +12,7 @@ from clingo import ast as clingo_ast
 start_time = time.time()
 
 # GLOBAL PARAMS:
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 k = 0
 clingo_output = False
 DEBUG = False
