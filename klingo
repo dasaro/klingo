@@ -7,6 +7,7 @@ import time
 from itertools import cycle
 
 import clingo
+from clingo import ast as clingo_ast
 
 start_time = time.time()
 
@@ -98,20 +99,27 @@ def valuation_block_constraint(valuation):
     return ":- " + ", ".join(literals) + "."
 
 
-def print_valuation(valuation, idx, depth, strategy):
+def print_valuation(valuation, idx, depth, strategy, bnm_atoms=None, colorize=False):
     bot_atoms = 0
     tot_atoms = 0
+    bnm_atoms = bnm_atoms or set()
     print(f"\nValuation {idx} (k={depth}, restart={strategy}):")
     if not clingo_output:
         for atom, value in valuation:
             if value == "?":
                 bot_atoms += 1
             tot_atoms += 1
-            print(f"V({atom}) = {value}")
+            if colorize and atom in bnm_atoms:
+                print(f"V(\033[34m{atom}\033[0m) = {value}")
+            else:
+                print(f"V({atom}) = {value}")
     else:
         for atom, value in valuation:
             if value == "1":
-                print(atom, end=" ")
+                if colorize and atom in bnm_atoms:
+                    print(f"\033[34m{atom}\033[0m", end=" ")
+                else:
+                    print(atom, end=" ")
             elif value == "?":
                 print("?" + atom, end=" ")
             if value == "?":
@@ -140,6 +148,194 @@ def parse_show_signatures(path):
         else:
             signatures.add((name, int(arity)))
     return signatures
+
+
+def _collect_constants_from_symbol(sym, constants):
+    if sym.type in (clingo.SymbolType.Number, clingo.SymbolType.String):
+        constants.add(sym)
+    elif sym.type == clingo.SymbolType.Function:
+        if len(sym.arguments) == 0:
+            constants.add(sym)
+        else:
+            for arg in sym.arguments:
+                _collect_constants_from_symbol(arg, constants)
+
+
+def _collect_constants_from_term(term, constants):
+    if term.ast_type == clingo_ast.ASTType.SymbolicTerm:
+        _collect_constants_from_symbol(term.symbol, constants)
+    elif term.ast_type == clingo_ast.ASTType.Function:
+        if not term.arguments:
+            constants.add(clingo.Function(term.name))
+        else:
+            for arg in term.arguments:
+                _collect_constants_from_term(arg, constants)
+
+
+def _collect_signatures_constants(path):
+    signatures = set()
+    constants = set()
+
+    def walk(node):
+        yield node
+        try:
+            keys = node.keys()
+        except Exception:
+            keys = []
+        for key in keys:
+            val = getattr(node, key)
+            if isinstance(val, clingo_ast.AST):
+                yield from walk(val)
+            elif isinstance(val, (list, clingo_ast.ASTSequence)):
+                for item in val:
+                    if isinstance(item, clingo_ast.AST):
+                        yield from walk(item)
+
+    def visit(node):
+        for sub in walk(node):
+            if sub.ast_type == clingo_ast.ASTType.SymbolicAtom:
+                sym_node = sub.symbol
+                target = None
+                if sym_node.ast_type == clingo_ast.ASTType.Function:
+                    target = sym_node
+                elif sym_node.ast_type == clingo_ast.ASTType.UnaryOperation:
+                    if sym_node.operator_type == clingo_ast.UnaryOperator.Minus:
+                        if sym_node.argument.ast_type == clingo_ast.ASTType.Function:
+                            target = sym_node.argument
+                if target is not None:
+                    signatures.add((target.name, len(target.arguments)))
+                    for arg in target.arguments:
+                        _collect_constants_from_term(arg, constants)
+
+    clingo_ast.parse_files([path], visit)
+    return signatures, constants
+
+
+def _cartesian_args(items, arity):
+    if arity == 0:
+        return [[]]
+    if not items:
+        return []
+    if arity == 1:
+        return [[item] for item in items]
+    tails = _cartesian_args(items, arity - 1)
+    out = []
+    for item in items:
+        for tail in tails:
+            out.append([item] + tail)
+    return out
+
+
+def add_classical_totality(control, path):
+    signatures, constants = _collect_signatures_constants(path)
+    if not signatures:
+        return
+    const_list = sorted(constants, key=str)
+    lines = []
+    for name, arity in sorted(signatures):
+        if name.startswith("#"):
+            continue
+        if arity == 0:
+            lines.append(f"1 {{ {name}; -{name} }} 1.")
+            continue
+        args_sets = _cartesian_args(const_list, arity)
+        for args in args_sets:
+            args_str = ",".join(str(a) for a in args)
+            lines.append(f"1 {{ {name}({args_str}); -{name}({args_str}) }} 1.")
+    if lines:
+        control.add("classical", [], "\n".join(lines))
+
+
+def _rewrite_body_literal_as_naf(lit):
+    if lit.atom.ast_type != clingo_ast.ASTType.SymbolicAtom:
+        return lit
+    sym = lit.atom.symbol
+    if sym.ast_type != clingo_ast.ASTType.UnaryOperation:
+        return lit
+    if sym.operator_type != clingo_ast.UnaryOperator.Minus:
+        return lit
+    base = sym.argument
+    new_atom = clingo_ast.SymbolicAtom(base)
+    if lit.sign == clingo_ast.Sign.NoSign:
+        new_sign = clingo_ast.Sign.Negation
+    else:
+        new_sign = lit.sign
+    return clingo_ast.Literal(lit.location, new_sign, new_atom)
+
+
+def add_default_completion_program(control, path):
+    with clingo_ast.ProgramBuilder(control) as builder:
+        def on_ast(node):
+            if node.ast_type == clingo_ast.ASTType.Rule:
+                new_body = [_rewrite_body_literal_as_naf(lit) for lit in node.body]
+                node = node.update(body=new_body)
+            builder.add(node)
+
+        clingo_ast.parse_files([path], on_ast)
+
+
+def _is_strong_negation(atom_str):
+    return atom_str.startswith("-") and len(atom_str) > 1 and atom_str[1].isalpha()
+
+
+def _completion_union(path, valuation):
+    control = clingo.Control(["-Wno-atom-undefined"])
+    add_default_completion_program(control, path)
+    lines = []
+    for atom, value in valuation:
+        if value == "1":
+            lines.append(f"{atom}.")
+        elif value == "0":
+            lines.append(f":- {atom}.")
+    if lines:
+        control.add("facts", [], "\n".join(lines))
+    parts = [("base", [])]
+    if lines:
+        parts.append(("facts", []))
+    control.ground(parts)
+    union = set()
+    with control.solve(yield_=True) as handle:
+        for model in handle:
+            for sym in model.symbols(atoms=True):
+                union.add(str(sym))
+    return union
+
+
+def apply_default_completion(valuation, path):
+    undecided = [atom for atom, value in valuation if value == "?" and not _is_strong_negation(atom)]
+    if not undecided:
+        return valuation, set()
+    union = _completion_union(path, valuation)
+    if not union:
+        return valuation, set()
+    index = {atom: idx for idx, (atom, _value) in enumerate(valuation)}
+    updated = list(valuation)
+    changed = set()
+    for atom in undecided:
+        neg_atom = "-" + atom
+        has_pos = atom in union
+        has_neg = neg_atom in union
+        if has_pos and not has_neg:
+            idx = index.get(atom)
+            if idx is not None:
+                updated[idx] = (atom, "1")
+                changed.add(atom)
+            neg_idx = index.get(neg_atom)
+            if neg_idx is not None and updated[neg_idx][1] == "?":
+                updated[neg_idx] = (neg_atom, "0")
+                changed.add(neg_atom)
+        elif has_neg and not has_pos:
+            idx = index.get(atom)
+            if idx is not None:
+                updated[idx] = (atom, "0")
+                changed.add(atom)
+            neg_idx = index.get(neg_atom)
+            if neg_idx is not None and updated[neg_idx][1] == "?":
+                updated[neg_idx] = (neg_atom, "1")
+                changed.add(neg_atom)
+    return updated, changed
+
+ 
 
 
 def atom_signature(atom_str):
@@ -173,6 +369,36 @@ if __name__ == "__main__":
         action="store_false",
         help="disables clingo-style output",
     )
+    parser.add_argument(
+        "--classical",
+        "--sat",
+        dest="classical",
+        action="store_true",
+        help="force totality with strong negation for each grounded atom",
+    )
+    three_nd_group = parser.add_mutually_exclusive_group()
+    three_nd_group.add_argument(
+        "--3nd-star",
+        dest="three_nd_mode",
+        action="store_const",
+        const="star",
+        help="use 3ND* semantics (default)",
+    )
+    three_nd_group.add_argument(
+        "--3nd*",
+        dest="three_nd_mode",
+        action="store_const",
+        const="star",
+        help="use 3ND* semantics (default)",
+    )
+    three_nd_group.add_argument(
+        "--3nd",
+        dest="three_nd_mode",
+        action="store_const",
+        const="classical",
+        help="use classical 3ND semantics (enables totality)",
+    )
+    parser.set_defaults(three_nd_mode="star")
     parser.add_argument("--dictionary", help="display the dictionary", action="store_true")
     parser.add_argument("--debug", help="display debug information", action="store_true")
     parser.add_argument(
@@ -188,6 +414,12 @@ if __name__ == "__main__":
         default="all",
         choices=["all", "brave", "cautious"],
         help="output mode: all valuations, brave (true in some), cautious (true in all).",
+    )
+    parser.add_argument(
+        "--bnm",
+        dest="bnm",
+        action="store_true",
+        help="bounded non-monotonic completion on undecided atoms (paper logic)",
     )
     parser.add_argument(
         "-n",
@@ -234,6 +466,7 @@ if __name__ == "__main__":
     brave_union = set()
     cautious_intersection = None
     all_atoms = None
+    bnm_true_seen = set()
     exhausted = False
     hit_limit = False
 
@@ -252,9 +485,14 @@ if __name__ == "__main__":
         propagator = Propagator(k)
         CURRENT_CONTROL.register_propagator(propagator)
         CURRENT_CONTROL.load(args.file)
+        if args.classical or args.three_nd_mode == "classical" or args.bnm:
+            add_classical_totality(CURRENT_CONTROL, args.file)
         if blocking_constraints:
             CURRENT_CONTROL.add("blocks", [], "\n".join(blocking_constraints))
-        CURRENT_CONTROL.ground([("base", [])])
+        parts = [("base", [])]
+        if args.classical or args.three_nd_mode == "classical" or args.bnm:
+            parts.append(("classical", []))
+        CURRENT_CONTROL.ground(parts)
         if blocking_constraints:
             CURRENT_CONTROL.ground([("blocks", [])])
 
@@ -285,16 +523,25 @@ if __name__ == "__main__":
 
         valuation_index += 1
         seen.add(signature)
+        base_valuation = propagator.valuation
+        completed_valuation = base_valuation
+        bnm_atoms = set()
+        if args.bnm:
+            completed_valuation, bnm_atoms = apply_default_completion(base_valuation, args.file)
         if clingo_output and show_signatures:
             filtered = []
-            for atom, value in propagator.valuation:
+            for atom, value in completed_valuation:
                 sig = atom_signature(atom)
                 if sig in show_signatures:
                     filtered.append((atom, value))
         else:
-            filtered = list(propagator.valuation)
+            filtered = list(completed_valuation)
 
         true_atoms = {atom for atom, value in filtered if value == "1"}
+        if bnm_atoms:
+            for atom, value in filtered:
+                if value == "1" and atom in bnm_atoms:
+                    bnm_true_seen.add(atom)
         brave_union |= true_atoms
         if cautious_intersection is None:
             cautious_intersection = set(true_atoms)
@@ -309,7 +556,10 @@ if __name__ == "__main__":
                 atoms = []
                 for atom, value in filtered:
                     if value == "1":
-                        atoms.append(atom)
+                        if colorize and atom in bnm_atoms:
+                            atoms.append("\033[34m" + atom + "\033[0m")
+                        else:
+                            atoms.append(atom)
                     elif value == "?":
                         if colorize:
                             atoms.append("\033[90m?" + atom + "\033[0m")
@@ -320,8 +570,8 @@ if __name__ == "__main__":
                 pass
         else:
             if args.mode == "all":
-                print_valuation(propagator.valuation, valuation_index, k, strategy)
-        block = valuation_block_constraint(propagator.valuation)
+                print_valuation(completed_valuation, valuation_index, k, strategy, bnm_atoms, colorize)
+        block = valuation_block_constraint(base_valuation)
         if block:
             if block not in blocking_constraints:
                 blocking_constraints.append(block)
@@ -356,7 +606,16 @@ if __name__ == "__main__":
                 atoms = sorted(cautious_intersection or set())
             print(f"Answer: (Time: {elapsed:.3f}s)")
             if atoms:
-                print(" ".join(atoms))
+                if colorize and bnm_true_seen:
+                    colored = []
+                    for atom in atoms:
+                        if atom in bnm_true_seen:
+                            colored.append("\033[34m" + atom + "\033[0m")
+                        else:
+                            colored.append(atom)
+                    print(" ".join(colored))
+                else:
+                    print(" ".join(atoms))
             models_suffix = "" if exhausted else "+"
             print(f"\nModels       : 1{models_suffix}")
             if args.mode == "brave":
@@ -391,6 +650,15 @@ if __name__ == "__main__":
             label = "Cautious consequences"
         print(f"\n{label} (k={k}):")
         if atoms:
-            print(" ".join(sorted(atoms)))
+            if colorize and bnm_true_seen:
+                colored = []
+                for atom in sorted(atoms):
+                    if atom in bnm_true_seen:
+                        colored.append("\033[34m" + atom + "\033[0m")
+                    else:
+                        colored.append(atom)
+                print(" ".join(colored))
+            else:
+                print(" ".join(sorted(atoms)))
         else:
             print("(none)")
