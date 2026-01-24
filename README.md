@@ -114,7 +114,7 @@ When `--clingo-output` is enabled (the default), model output follows clingo's f
 
 **v2.0.0**:
 
-- Added ILASP integration for learning heuristic rules (`--learn-ilasp`, `--show-ilasp-task`).
+- Added ILASP integration for learning heuristic rules (`--learn-ilasp`, `--show-ilasp-task`) **(experimental)**.
 - Added multi-target ILASP support and per-target runs (`--per-target`).
 
 **v1.0.1**:
