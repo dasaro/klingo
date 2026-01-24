@@ -61,7 +61,11 @@ def main():
 
     for name in ["test_a", "test_b"]:
         program = f"Experiments/wason/rule_level/{name}.lp"
-        atoms = ["flip(d1)", "flip(d2)", "flip(d3)", "flip(d4)"] if name == "test_a" else ["flip(e1)", "flip(e2)", "flip(e3)", "flip(e4)"]
+        if name == "test_a":
+            base_atoms = ["flip(d1)", "flip(d2)", "flip(d3)", "flip(d4)"]
+        else:
+            base_atoms = ["flip(e1)", "flip(e2)", "flip(e3)", "flip(e4)"]
+        atoms = base_atoms + [f"-{a}" for a in base_atoms]
         truths = clingo_truth(program, atoms)
         base_vals = run_klingo(program, k=0)
         heur_vals = run_klingo(program, heuristics=[learned], k=0)

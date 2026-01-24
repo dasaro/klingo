@@ -5,6 +5,9 @@ import re
 import sys
 import time
 from itertools import cycle
+import subprocess
+import tempfile
+import os
 
 import clingo
 from clingo import ast as clingo_ast
@@ -12,7 +15,7 @@ from clingo import ast as clingo_ast
 start_time = time.time()
 
 # GLOBAL PARAMS:
-__version__ = "1.0.1"
+__version__ = "2.0.0"
 k = 0
 clingo_output = False
 DEBUG = False
@@ -170,6 +173,120 @@ def parse_show_signatures(paths):
             else:
                 signatures.add((name, int(arity)))
     return signatures
+
+
+def _extract_unary_constants_from_facts(paths, predicate):
+    consts = set()
+    prefix = f"{predicate}("
+    for path in paths:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("%") or line.startswith("#"):
+                continue
+            for segment in line.split("."):
+                segment = segment.strip()
+                if not segment or ":-" in segment:
+                    continue
+                if segment.startswith(prefix) and segment.endswith(")"):
+                    body = segment[len(prefix) : -1]
+                    if body and body.replace("_", "").isalnum() and body[0].islower():
+                        consts.add(body)
+    return consts
+
+
+def _extract_ground_facts(paths):
+    facts = []
+    for path in paths:
+        try:
+            text = open(path, "r", encoding="utf-8", errors="ignore").read()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("%") or line.startswith("#"):
+                continue
+            for segment in line.split("."):
+                segment = segment.strip()
+                if not segment or ":-" in segment:
+                    continue
+                facts.append(segment + ".")
+    return facts
+
+
+def _clingo_all_models(paths):
+    cmd = ["clingo"] + list(paths) + ["-n", "0", "--outf=2"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode not in {0, 10, 20, 30}:
+        raise RuntimeError(res.stderr or res.stdout)
+    try:
+        data = __import__("json").loads(res.stdout)
+    except Exception as exc:
+        raise RuntimeError("Failed to parse clingo JSON output") from exc
+    models = data.get("Call", [])[0].get("Witnesses", [])
+    return [set(m.get("Value", [])) for m in models]
+
+
+def _cautious_and_negative(models, atoms):
+    if not models:
+        return set(), set()
+    true_all = set.intersection(*models)
+    false_all = set(atoms) - set.union(*models)
+    return true_all, false_all
+
+
+def _build_ilasp_task(paths, targets):
+    for _pred, arity in targets:
+        if arity != 1:
+            raise RuntimeError("ILASP task builder currently supports unary targets only.")
+    facts = _extract_ground_facts(paths)
+    # derive background predicate names (unary facts only)
+    bg_preds = set()
+    for fact in facts:
+        if "(" in fact and fact.endswith(")."):
+            name = fact.split("(", 1)[0]
+            args = fact.split("(", 1)[1].rsplit(")", 1)[0]
+            if "," not in args:
+                bg_preds.add(name)
+
+    lines = []
+    for pred, _arity in targets:
+        lines.append(f"#modeh({pred}(var(c))).")
+    for pred in sorted(bg_preds):
+        if any(pred == t for t, _a in targets):
+            continue
+        lines.append(f"#modeb({pred}(var(c))).")
+    lines.append("#maxv(1).")
+    lines.extend(facts)
+    models = _clingo_all_models(paths)
+    idx = 1
+    for target_pred, _arity in targets:
+        consts = _extract_unary_constants_from_facts(paths, "card")
+        if not consts:
+            for pred in sorted(bg_preds):
+                if pred == target_pred:
+                    continue
+                consts |= _extract_unary_constants_from_facts(paths, pred)
+        atoms = {f"{target_pred}({c})" for c in consts}
+        if not atoms:
+            atoms = {a for m in models for a in m if a.startswith(f"{target_pred}(")}
+
+        pos, neg = _cautious_and_negative(models, atoms)
+        pos = {a for a in pos if a.startswith(f"{target_pred}(")}
+        neg = {a for a in neg if a.startswith(f"{target_pred}(")}
+        if not neg:
+            neg = {f"-{a}" for a in pos}
+
+        for atom in sorted(pos):
+            lines.append(f"#pos(p{idx}, {{{atom}}}, {{}}).")
+            idx += 1
+        for atom in sorted(neg):
+            lines.append(f"#neg(n{idx}, {{{atom}}}, {{}}).")
+            idx += 1
+    return "\n".join(lines) + "\n"
 
 
 def _collect_constants_from_symbol(sym, constants):
@@ -485,6 +602,33 @@ if __name__ == "__main__":
         help="learned heuristics file (used for introspection and defaults)",
     )
     parser.add_argument(
+        "--learn-ilasp",
+        dest="learn_ilasp",
+        metavar="OUT",
+        help="run ILASP and write learned program to OUT",
+    )
+    parser.add_argument(
+        "--show-ilasp-task",
+        action="store_true",
+        help="print the generated ILASP task and exit",
+    )
+    parser.add_argument(
+        "--ilasp-target",
+        action="append",
+        default=[],
+        help="target predicate for ILASP (name[/arity]); repeatable, inferred from #show if omitted",
+    )
+    parser.add_argument(
+        "--per-target",
+        action="store_true",
+        help="run ILASP separately per target predicate",
+    )
+    parser.add_argument(
+        "--ilasp-version",
+        default="4",
+        help="ILASP version to use (default: 4)",
+    )
+    parser.add_argument(
         "--bnm",
         dest="bnm",
         action="store_true",
@@ -548,6 +692,83 @@ if __name__ == "__main__":
         colorize = False
     else:
         colorize = sys.stdout.isatty()
+
+    # ILASP pipeline (optional)
+    if args.learn_ilasp or args.show_ilasp_task:
+        targets = []
+        if args.ilasp_target:
+            targets = list(args.ilasp_target)
+        else:
+            unary_shows = [sig for sig in show_signatures if sig[1] == 1]
+            if unary_shows:
+                targets = [sig[0] + "/1" for sig in unary_shows]
+            else:
+                raise SystemExit("ILASP target not specified and no unary #show found.")
+
+        parsed_targets = []
+        for target in targets:
+            if "/" in target:
+                target_pred, target_arity = target.split("/", 1)
+                target_arity = int(target_arity)
+            else:
+                target_pred = target
+                target_arity = 1
+            parsed_targets.append((target_pred, target_arity))
+
+        if args.show_ilasp_task and args.per_target:
+            for pred, arity in parsed_targets:
+                task = _build_ilasp_task(all_paths, [(pred, arity)])
+                print(f"% ILASP task for {pred}/{arity}")
+                print(task.rstrip())
+                print()
+            raise SystemExit(0)
+        if args.show_ilasp_task and not args.per_target:
+            task = _build_ilasp_task(all_paths, parsed_targets)
+            print(task.rstrip())
+            raise SystemExit(0)
+
+        if args.learn_ilasp:
+            if args.per_target:
+                out_base = args.learn_ilasp
+                for pred, arity in parsed_targets:
+                    task = _build_ilasp_task(all_paths, [(pred, arity)])
+                    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".las") as handle:
+                        handle.write(task)
+                        task_path = handle.name
+                    cmd = ["ILASP", f"--version={args.ilasp_version}", task_path]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode not in {0, 10, 20, 30}:
+                        raise SystemExit(res.stderr or res.stdout)
+                    if out_base.endswith("/") or out_base.endswith(os.sep):
+                        os.makedirs(out_base, exist_ok=True)
+                        out_path = os.path.join(out_base, f"learned_{pred}.lp")
+                    elif out_base.endswith(".lp"):
+                        out_path = out_base.replace(".lp", f"_{pred}.lp")
+                    else:
+                        out_path = out_base + f"_{pred}.lp"
+                    with open(out_path, "w", encoding="utf-8") as handle:
+                        handle.write(res.stdout)
+                    print(f"Wrote learned program to {out_path}")
+                raise SystemExit(0)
+            task = _build_ilasp_task(all_paths, parsed_targets)
+            if args.show_ilasp_task:
+                print(task.rstrip())
+                raise SystemExit(0)
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".las") as handle:
+                handle.write(task)
+                task_path = handle.name
+            cmd = ["ILASP", f"--version={args.ilasp_version}", task_path]
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode not in {0, 10, 20, 30}:
+                raise SystemExit(res.stderr or res.stdout)
+            with open(args.learn_ilasp, "w", encoding="utf-8") as handle:
+                handle.write(res.stdout)
+            print(f"Wrote learned program to {args.learn_ilasp}")
+            raise SystemExit(0)
+        if args.show_ilasp_task:
+            task = _build_ilasp_task(all_paths, parsed_targets)
+            print(task.rstrip())
+            raise SystemExit(0)
 
     while True:
         strategy = next(restart_cycle)

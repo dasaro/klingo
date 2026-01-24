@@ -1,4 +1,4 @@
-# k-lingo 1.0.1
+# k-lingo 2.0.0
 
 ## Overview
 k-lingo is a Python-based tool that runs a clingo propagator to compute k-depth 3ND*-valuations for logic programs.
@@ -46,6 +46,10 @@ Common flags:
 - `--3nd`: use classical 3ND semantics (enables totality).
 - `--bnm`: bounded non-monotonic completion on undecided atoms (paper logic). Implies `--3nd`.
 - `--heuristics FILE`: learned defaults file for introspection and transfer; can be passed multiple times.
+- `--learn-ilasp OUT`: generate an ILASP task and run ILASP to write a learned program to `OUT`.
+- `--show-ilasp-task`: print the generated ILASP task and exit.
+- `--ilasp-target name[/arity]`: target predicate for ILASP (repeatable; defaults to all unary `#show` predicates).
+- `--per-target`: run ILASP separately for each target predicate.
 - `--restart-strategy`: restart policy (luby, geometric, dynamic, fixed, none). Provide a comma-separated list to cycle.
 - `--mode` / `--enum-mode`: output mode: all valuations, brave (true in some valuation), cautious (true in all valuations).
 - `-n, --models`: stop after N valuations (0 = enumerate all).
@@ -107,6 +111,11 @@ When `--clingo-output` is enabled (the default), model output follows clingo's f
 - `scripts/install.sh`: optional installation helper.
 
 ## CHANGELOG
+
+**v2.0.0**:
+
+- Added ILASP integration for learning heuristic rules (`--learn-ilasp`, `--show-ilasp-task`).
+- Added multi-target ILASP support and per-target runs (`--per-target`).
 
 **v1.0.1**:
 
