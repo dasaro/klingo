@@ -1,1 +1,0 @@
-child(1..3).myself(1).0{ isMuddy(X) }1 :- child(X).iKnowWhetherIsMuddy(X) :- iSee(X), child(X).iSee(X) :- child(X), not myself(X).1{ isMuddy(X) : child(X) }.

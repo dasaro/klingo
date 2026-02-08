@@ -1,4 +1,4 @@
-# k-lingo 2.0.0
+# k-lingo 1.2.0
 
 ## Overview
 k-lingo is a Python-based tool that runs a clingo propagator to compute k-depth 3ND*-valuations for logic programs.
@@ -31,8 +31,8 @@ export PATH="$PATH:/path/to/repo"
 Run against one or more `.lp` programs:
 
 ```sh
-./klingo -k <depth> Examples/example1.lp
-./klingo -k <depth> Examples/example1.lp Examples/example2.lp
+./klingo -k <depth> Examples/kernel/asp_convergence.lp
+./klingo -k <depth> Examples/kernel/asp_convergence.lp Examples/kernel/enum_modes.lp
 ```
 
 Common flags:
@@ -41,12 +41,9 @@ Common flags:
 - `--no-clingo-output`: use the legacy k-lingo output format.
 - `--dictionary`: print the solver literal mapping.
 - `--debug`: print debug information.
-- `--classical`: enforce totality with strong negation for each grounded atom.
-- `--3nd-star`: use 3ND* semantics (default).
-- `--3nd`: use classical 3ND semantics (enables totality).
-- `--bnm`: bounded non-monotonic completion on undecided atoms (paper-inspired, non-branching core completion). Implies `--3nd`.
-- `--asp-approx`: shorthand for mode (i), approximation of a non-monotonic logic (same as `--3nd-star`).
-- `--classical-approx`: shorthand for mode (ii), non-monotonic approximation of a classical logic (same as `--bnm`).
+- `--3nd-star`: original ASP approximation (default mode).
+- `--3nd`: totality axioms only, no completion.
+- `--bnm`: totality axioms plus bounded non-monotonic completion on undecided atoms.
 - `--restart-strategy`: restart policy (luby, geometric, dynamic, fixed, none). Provide a comma-separated list to cycle.
 - `--mode`: output mode: all valuations, brave (true in some valuation), cautious (true in all valuations).
 - `-n, --models`: stop after N valuations (0 = enumerate all).
@@ -56,54 +53,43 @@ k-lingo enumerates k-depth valuations by stopping at the first valuation found, 
 Quick semantic entry points:
 
 ```sh
-./klingo --asp-approx -k 1 Examples/example1.lp
-./klingo --classical-approx -k 1 Examples/example1.lp
+./klingo --3nd-star -k 1 Examples/kernel/asp_convergence.lp
+./klingo --3nd -k 1 Examples/kernel/asp_convergence.lp
+./klingo --bnm -k 1 Examples/kernel/bnm_totality.lp
 ```
 
 Naive semi-orthogonal decomposition (intuition):
 - Let `P` be a program and `k` the depth bound.
-- Mode (i) `--asp-approx` computes `A_k(P)`: depth-bounded approximation of the non-monotonic semantics directly on `P` (3ND* track).
-- Mode (ii) `--classical-approx` computes `C_k(P)`: first force a classicalized base (`3ND` totality), then apply bounded non-monotonic completion (BNM track) over the already decided core, without extra completion branching.
+- Mode (i) `--3nd-star` computes `A_k(P)`: depth-bounded approximation of the non-monotonic semantics directly on `P`.
+- Mode (ii.a) `--3nd` computes `T_k(P)`: depth-bounded search over the classicalized base (`3ND` totality only).
+- Mode (ii.b) `--bnm` computes `C_k(P)`: `--3nd` plus bounded non-monotonic completion over the already decided core.
 - Informally, you can view these as two axes:
-  - ASP-side axis: `P -> A_k(P)`
-  - Classical-side axis: `P -> classical(P) -> C_k(P)`
+  - ASP-side axis: `P -> A_k(P)` (`--3nd-star`)
+  - Classical-side axis: `P -> classical(P) -> T_k(P) -> C_k(P)` (`--3nd` to `--bnm`)
 - As `k` increases, both tracks are intended to stabilize, but they need not coincide at small `k`.
 
 If `./klingo` is not on your PATH, use:
 
 ```sh
-python3 klingo -k 0 Examples/example2.lp
+python3 klingo -k 0 Examples/kernel/enum_modes.lp
 ```
 
 ## Example Runs
 Small sanity checks (run locally):
 
 ```sh
-python3 klingo -k 0 Examples/example1.lp
-python3 klingo -k 1 Examples/example1.lp
-python3 klingo -k 1 Examples/mini_sudoku.lp
-python3 klingo -k 1 --restart-strategy luby,geometric Examples/example1.lp
-python3 klingo -k 1 --mode brave Examples/example1.lp
-python3 klingo -k 1 --mode cautious Examples/example1.lp
-python3 klingo -k 1 --mode brave Examples/aba_example.lp
-python3 klingo -k 1 --mode cautious Examples/aba_example.lp
+python3 klingo --3nd-star -k 0 Examples/kernel/asp_convergence.lp
+python3 klingo --3nd-star -k 1 Examples/kernel/asp_convergence.lp
+python3 klingo --3nd-star -k 2 --mode brave Examples/kernel/enum_modes.lp -n 0
+python3 klingo --3nd-star -k 2 --mode cautious Examples/kernel/enum_modes.lp -n 0
+python3 klingo --bnm -k 0 Examples/kernel/bnm_children_flip.lp --no-clingo-output -n 1
+python3 klingo --bnm -k 2 Examples/kernel/bnm_totality.lp --mode brave -n 0
+python3 klingo --3nd-star -k 0 Examples/kernel/unsat.lp
 ```
 
 Notes:
-- `example1.lp` is SAT at depth 0 with undefined atoms, and becomes total at depth 1.
-- `mini_sudoku.lp` is SAT at depth 1 and returns a partial valuation with some bottoms.
-
-## Pretty-Printed Sudoku
-To render Sudoku grids without embedding formatting in `klingo`, pipe its output to the helper formatter:
-
-```sh
-python3 klingo -k 6 --clingo-output Examples/sudoku.lp | \\
-  python3 scripts/pretty_sudoku_from_klingo.py
-python3 klingo -k 6 --mode cautious --clingo-output Examples/sudoku.lp | \\
-  python3 scripts/pretty_sudoku_from_klingo.py
-```
-
-The formatter reads from stdin and formats `sudoku/3` atoms into a 9x9 grid with 3x3 boxes.
+- `asp_convergence.lp` is a minimal alternating-default benchmark for depth behavior.
+- `bnm_totality.lp` is intended for direct comparison with `clingo` plus explicit totality axioms.
 
 ## Output Format
 The tool prints each atom with its truth value:
@@ -125,33 +111,52 @@ When color is disabled, atoms are prefixed with ASCII marker `[b]`.
 
 ## Project Layout
 - `klingo`: main executable script.
-- `Examples/`: sample `.lp` programs for validation.
-- `scripts/pretty_sudoku_from_klingo.py`: stdin formatter for Sudoku grids.
+- `Examples/kernel/`: focused kernel `.lp` programs for validation.
 - `scripts/install.sh`: optional installation helper.
+
+## Versioning
+This repository uses `V.X(.Y)`:
+- `V`: stable major generation.
+- `X`: feature/minor release within the stable generation.
+- `Y` (optional): patch/hotfix release.
+
+Current release is in the `1.*` stable line. Bump guidance:
+- Breaking semantic/CLI changes: bump `V`, reset `X`/`Y`.
+- New backwards-compatible features or notable workflow changes: bump `X`.
+- Bugfix-only or docs/test-only maintenance: bump `Y`.
 
 ## CHANGELOG
 
-**v2.0.0**:
+**1.2.0**:
 
-- Added shorthand semantic modes (`--asp-approx`, `--classical-approx`) and stabilized non-branching BNM completion.
+- Reduced `Examples/` to a focused kernel set under `Examples/kernel/`.
+- Added explicit convergence verification workflow:
+  - `--3nd-star` vs plain `clingo`.
+  - `--bnm` vs `clingo` on `(program + totality axioms)`.
+- Removed overlapping/legacy examples and updated usage commands accordingly.
 
-**v1.0.0**:
+**1.1.0**:
+
+- Stabilized the three-mode semantic interface: `--3nd-star`, `--3nd`, `--bnm`.
+- Kept totality/completion as mode-internal semantics (not separately user-tunable).
+
+**1.0.0**:
 
 - Added brave/cautious modes, restart strategies, and valuation enumeration controls.
 - Added helper scripts for installation and Sudoku pretty printing.
 
-**v0.0.3**:
+**0.0.3**:
 
 - Klingo now outputs the number of atoms and bottoms in the 3ND\*-valuation.
 
-**v0.0.2**:
+**0.0.2**:
 
 - README created
 - Added options to control output format
 - Output now clearly states when the input logic program is unsatisfisable
 - Output now clearly states if the found 3ND\*-valuation is total
 
-**v0.0.1**:
+**0.0.1**:
 
 - Git repository created.
 - First alpha version uploaded.

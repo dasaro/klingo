@@ -12,7 +12,7 @@ from clingo import ast as clingo_ast
 start_time = time.time()
 
 # GLOBAL PARAMS:
-__version__ = "2.0.0"
+__version__ = "1.2.0"
 k = 0
 clingo_output = False
 DEBUG = False
@@ -371,9 +371,6 @@ def apply_default_completion(valuation, paths):
                 bnm_atoms.add(neg_atom)
     return updated, bnm_atoms
 
- 
-
-
 def atom_signature(atom_str):
     if "(" not in atom_str:
         return atom_str, 0
@@ -387,7 +384,7 @@ def atom_signature(atom_str):
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
-        description="Compute k-depth 3ND* valuations for ASP programs.",
+        description="Compute k-depth valuations for ASP programs.",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("files", nargs="+", type=str, help="path(s) to base lp file(s)")
@@ -405,38 +402,29 @@ if __name__ == "__main__":
         action="store_false",
         help="disables clingo-style output",
     )
-    parser.add_argument(
-        "--classical",
-        dest="classical",
-        action="store_true",
-        help="force totality with strong negation for each grounded atom",
-    )
-    three_nd_group = parser.add_mutually_exclusive_group()
-    three_nd_group.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--3nd-star",
-        dest="three_nd_mode",
+        dest="solver_mode",
         action="store_const",
-        const="star",
-        help="use 3ND* semantics (default)",
+        const="3nd-star",
+        help="3ND* mode: original ASP approximation (default)",
     )
-    three_nd_group.add_argument(
+    mode_group.add_argument(
         "--3nd",
-        dest="three_nd_mode",
+        dest="solver_mode",
         action="store_const",
-        const="classical",
-        help="use classical 3ND semantics (enables totality)",
+        const="3nd",
+        help="3ND mode: totality axioms only (no completion)",
     )
-    parser.add_argument(
-        "--asp-approx",
-        action="store_true",
-        help="shorthand semantic mode: approximate non-monotonic logic (same as --3nd-star)",
+    mode_group.add_argument(
+        "--bnm",
+        dest="solver_mode",
+        action="store_const",
+        const="bnm",
+        help="BNM mode: totality axioms + bounded non-monotonic completion",
     )
-    parser.add_argument(
-        "--classical-approx",
-        action="store_true",
-        help="shorthand semantic mode: non-monotonic approximation of classical logic (same as --bnm)",
-    )
-    parser.set_defaults(three_nd_mode="star")
+    parser.set_defaults(solver_mode="3nd-star")
     parser.add_argument("--dictionary", help="display the dictionary", action="store_true")
     parser.add_argument("--debug", help="display debug information", action="store_true")
     parser.add_argument(
@@ -453,12 +441,6 @@ if __name__ == "__main__":
         help="output mode: all valuations, brave (true in some), cautious (true in all).",
     )
     parser.add_argument(
-        "--bnm",
-        dest="bnm",
-        action="store_true",
-        help="bounded non-monotonic completion on undecided atoms (paper logic)",
-    )
-    parser.add_argument(
         "-n",
         "--models",
         type=int,
@@ -472,15 +454,6 @@ if __name__ == "__main__":
         help="colorize ?atoms in clingo-style output (default: auto)",
     )
     args = parser.parse_args()
-    if args.asp_approx and args.classical_approx:
-        raise SystemExit("Choose only one semantic shorthand: --asp-approx or --classical-approx.")
-    if args.asp_approx and (args.bnm or args.classical):
-        raise SystemExit("--asp-approx cannot be combined with --bnm/--classical.")
-    if args.classical_approx:
-        args.bnm = True
-        args.three_nd_mode = "classical"
-    elif args.asp_approx:
-        args.three_nd_mode = "star"
     k = args.depth
     clingo_output = args.clingo_output
     if args.debug:
@@ -534,7 +507,7 @@ if __name__ == "__main__":
         CURRENT_CONTROL.register_propagator(propagator)
         for path in all_paths:
             CURRENT_CONTROL.load(path)
-        needs_classical = args.classical or args.three_nd_mode == "classical" or args.bnm
+        needs_classical = args.solver_mode in {"3nd", "bnm"}
         if needs_classical:
             add_classical_totality(CURRENT_CONTROL, all_paths)
         if blocking_constraints:
@@ -576,7 +549,7 @@ if __name__ == "__main__":
         base_valuation = propagator.valuation
         completed_valuation = base_valuation
         bnm_atoms = set()
-        if args.bnm:
+        if args.solver_mode == "bnm":
             completed_valuation, bnm_atoms = apply_default_completion(base_valuation, all_paths)
         tag_map = {}
         for atom in bnm_atoms:
