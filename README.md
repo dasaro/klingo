@@ -41,20 +41,33 @@ Common flags:
 - `--no-clingo-output`: use the legacy k-lingo output format.
 - `--dictionary`: print the solver literal mapping.
 - `--debug`: print debug information.
-- `--classical` / `--sat`: enforce totality with strong negation for each grounded atom.
-- `--3nd-star` / `--3nd*`: use 3ND* semantics (default). Note: `--3nd*` may need quoting in some shells.
+- `--classical`: enforce totality with strong negation for each grounded atom.
+- `--3nd-star`: use 3ND* semantics (default).
 - `--3nd`: use classical 3ND semantics (enables totality).
-- `--bnm`: bounded non-monotonic completion on undecided atoms (paper logic). Implies `--3nd`.
-- `--heuristics FILE`: learned defaults file for introspection and transfer; can be passed multiple times.
-- `--learn-ilasp OUT`: generate an ILASP task and run ILASP to write a learned program to `OUT`.
-- `--show-ilasp-task`: print the generated ILASP task and exit.
-- `--ilasp-target name[/arity]`: target predicate for ILASP (repeatable; defaults to all unary `#show` predicates).
-- `--per-target`: run ILASP separately for each target predicate.
+- `--bnm`: bounded non-monotonic completion on undecided atoms (paper-inspired, non-branching core completion). Implies `--3nd`.
+- `--asp-approx`: shorthand for mode (i), approximation of a non-monotonic logic (same as `--3nd-star`).
+- `--classical-approx`: shorthand for mode (ii), non-monotonic approximation of a classical logic (same as `--bnm`).
 - `--restart-strategy`: restart policy (luby, geometric, dynamic, fixed, none). Provide a comma-separated list to cycle.
-- `--mode` / `--enum-mode`: output mode: all valuations, brave (true in some valuation), cautious (true in all valuations).
+- `--mode`: output mode: all valuations, brave (true in some valuation), cautious (true in all valuations).
 - `-n, --models`: stop after N valuations (0 = enumerate all).
 
 k-lingo enumerates k-depth valuations by stopping at the first valuation found, restarting from depth 0, and applying blocking constraints to avoid repeats.
+
+Quick semantic entry points:
+
+```sh
+./klingo --asp-approx -k 1 Examples/example1.lp
+./klingo --classical-approx -k 1 Examples/example1.lp
+```
+
+Naive semi-orthogonal decomposition (intuition):
+- Let `P` be a program and `k` the depth bound.
+- Mode (i) `--asp-approx` computes `A_k(P)`: depth-bounded approximation of the non-monotonic semantics directly on `P` (3ND* track).
+- Mode (ii) `--classical-approx` computes `C_k(P)`: first force a classicalized base (`3ND` totality), then apply bounded non-monotonic completion (BNM track) over the already decided core, without extra completion branching.
+- Informally, you can view these as two axes:
+  - ASP-side axis: `P -> A_k(P)`
+  - Classical-side axis: `P -> classical(P) -> C_k(P)`
+- As `k` increases, both tracks are intended to stabilize, but they need not coincide at small `k`.
 
 If `./klingo` is not on your PATH, use:
 
@@ -97,7 +110,13 @@ The tool prints each atom with its truth value:
 - `1` for true, `0` for false, `?` for undefined.
 At the end, it prints satisfiability, atom counts, and elapsed time.
 
-When `--clingo-output` is enabled (the default), model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).\nUse `--no-clingo-output` to print the legacy k-lingo format instead.\nIn brave/cautious mode, `-n` controls how many valuations contribute to consequences (mirroring clingo's `-n`).\nIf `#show pred/arity` directives are present, only those atoms are printed in clingo-style output.\nWith `--bnm`, undecided atoms may be completed to true or false if derivable under default negation. When color is enabled:\n- Blue marks standard non-monotonic completions from the core program.\n- Dark yellow marks completions due to the learned heuristics file.\n- Dark green marks confirmation: a learned default’s value is derived by the solver at this depth.\n- Teal marks disconfirmation: a learned default’s value is flipped by deeper reasoning.\nWhen color is disabled, atoms are prefixed with ASCII markers: `[b]`, `[h]`, `[c]`, `[d]` respectively.
+When `--clingo-output` is enabled (the default), model output follows clingo's format (`Answer: N`, atom line, and summary), except undefined atoms are prefixed with `?` and can be colorized (see `--color`).
+Use `--no-clingo-output` to print the legacy k-lingo format instead.
+In brave/cautious mode, `-n` controls how many valuations contribute to consequences (mirroring clingo's `-n`).
+If `#show pred/arity` directives are present, only those atoms are printed in clingo-style output.
+With `--bnm`, undecided atoms may be completed from the already decided core (non-branching). This keeps depth-0 behavior conservative and avoids by-cases completion at depth 0. When color is enabled:
+- Blue marks standard non-monotonic completions from the core program.
+When color is disabled, atoms are prefixed with ASCII marker `[b]`.
 
 ## Computational Considerations
 - Runtime can be highly non-monotonic in `k`; intermediate depths may be slower than both low and high depths.
@@ -114,13 +133,7 @@ When `--clingo-output` is enabled (the default), model output follows clingo's f
 
 **v2.0.0**:
 
-- Added ILASP integration for learning heuristic rules (`--learn-ilasp`, `--show-ilasp-task`) **(experimental)**.
-- Added multi-target ILASP support and per-target runs (`--per-target`).
-
-**v1.0.1**:
-
-- Added heuristic transfer experiments and rule-level prototype.
-- Added Wason-like experimental runners and ILASP plan.
+- Added shorthand semantic modes (`--asp-approx`, `--classical-approx`) and stabilized non-branching BNM completion.
 
 **v1.0.0**:
 
