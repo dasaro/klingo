@@ -12,7 +12,7 @@ from clingo import ast as clingo_ast
 start_time = time.time()
 
 # GLOBAL PARAMS:
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 k = 0
 clingo_output = False
 DEBUG = False
@@ -149,7 +149,7 @@ def print_valuation(valuation, idx, depth, strategy, tag_map=None, colorize=Fals
 
 def parse_show_signatures(paths):
     signatures = set()
-    pattern = re.compile(r"#show\s+([A-Za-z_][A-Za-z0-9_]*)(?:/(\d+))?")
+    pattern = re.compile(r"#show\s+(-?[A-Za-z_][A-Za-z0-9_]*)(?:\s*/\s*(\d+))?")
     for path in paths:
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as handle:
