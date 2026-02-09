@@ -1,4 +1,4 @@
-# k-lingo 1.2.1
+# k-lingo 1.2.2
 
 ## Overview
 k-lingo is a Python-based tool that runs a clingo propagator to compute k-depth 3ND*-valuations for logic programs.
@@ -126,6 +126,10 @@ Current release is in the `1.*` stable line. Bump guidance:
 - Bugfix-only or docs/test-only maintenance: bump `Y`.
 
 ## CHANGELOG
+
+**1.2.2**:
+
+- Colorized legend entries in color mode (legend now renders colored markers directly).
 
 **1.2.1**:
 

@@ -12,7 +12,7 @@ from clingo import ast as clingo_ast
 start_time = time.time()
 
 # GLOBAL PARAMS:
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 k = 0
 clingo_output = False
 DEBUG = False
@@ -696,9 +696,15 @@ if __name__ == "__main__":
 
     if legend_flags:
         parts = []
-        if "?" in legend_flags:
-            parts.append("?=undefined")
-        if "bnm" in legend_flags:
-            parts.append("blue=bnm" if colorize else "[b]=bnm")
+        if colorize:
+            if "?" in legend_flags:
+                parts.append("\033[90m?atom\033[0m = undefined")
+            if "bnm" in legend_flags:
+                parts.append("\033[34matom\033[0m = BNM-completed")
+        else:
+            if "?" in legend_flags:
+                parts.append("?atom = undefined")
+            if "bnm" in legend_flags:
+                parts.append("[b]atom = BNM-completed")
         if parts:
             print("Legend: " + ", ".join(parts))
