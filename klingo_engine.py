@@ -21,7 +21,7 @@ from klingo_totality import (
     render_totality_rules,
 )
 
-__version__ = "2.5.0"
+__version__ = "2.6.0"
 
 RESTART_STRATEGIES = {
     "luby": "L,60",
@@ -258,6 +258,16 @@ def build_arg_parser():
         default=None,
         metavar="PATH",
         help="load a lemma file produced by --learn or --ilasp alongside the input files",
+    )
+    learn_group.add_argument(
+        "--gate-lemmas",
+        action="store_true",
+        help=(
+            "apply the compiled bias only when the instance is syntactically familiar: "
+            "compare the instance's Weisfeiler-Leman signature against the lemma file's "
+            "provenance instances and disable the lemmas (assert their __ab guards) when "
+            "the distance exceeds the provenance threshold (requires --use-lemmas)"
+        ),
     )
 
     output_group = parser.add_argument_group("output")
@@ -593,6 +603,16 @@ def run(argv=None):
         all_paths.append(args.use_lemmas)
     validate_input_files(all_paths)
     validate_program_syntax(all_paths)
+
+    if args.gate_lemmas:
+        if not args.use_lemmas:
+            raise SystemExit("--gate-lemmas requires --use-lemmas.")
+        from klingo_learn import gate_guard_file
+
+        gate_note, gate_guard_path = gate_guard_file(args.use_lemmas, args.files)
+        print(f"*** Info : (klingo): {gate_note}")
+        if gate_guard_path:
+            all_paths.append(gate_guard_path)
 
     restart_keys = [key.strip() for key in args.restart_strategy.split(",") if key.strip()]
     for key in restart_keys:

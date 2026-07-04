@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.6.0
+
+- **Added `--gate-lemmas`**: a syntactic trust region for compiled lemmas. `--learn` and
+  `--ilasp` now stamp lemma files with Weisfeiler-Leman histograms of their provenance
+  instances (for `--ilasp`, the gain instances that licensed the hypothesis) plus a
+  familiarity threshold derived from the provenance spread. With `--gate-lemmas`, the
+  engine compares the current instance's name-blind structural signature against the
+  provenance; unfamiliar instances get the lemmas' `__ab` guards asserted, disabling the
+  compiled bias for that run (reported via an Info line). Familiar instances apply the
+  bias unchanged.
+
 ## 2.5.0
 
 - **Added inductive learning via ILASP** (`--ilasp PATH`, requires `--bnm` and the ILASP

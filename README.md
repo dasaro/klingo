@@ -1,4 +1,4 @@
-# k-lingo 2.5.0
+# k-lingo 2.6.0
 
 k-lingo is a Python CLI wrapper around clingo for depth-bounded reasoning modes:
 - `--3nd-star`: depth-bounded approximation of the stable-model semantics;
@@ -93,6 +93,12 @@ until no sampled counterexample context remains. `--use-lemmas` loads such a fil
 retractable by asserting the guard atom, and leave the classical limit
 unchanged. Guard atoms (`__`-prefixed) participate in solving but are never
 displayed.
+
+`--gate-lemmas` (with `--use-lemmas`) restricts the compiled bias to a
+syntactic trust region: lemma files carry Weisfeiler-Leman signatures of
+their provenance instances, and when the current instance's name-blind
+structural distance exceeds the provenance threshold, the lemmas' guard
+atoms are asserted and the bias is disabled for that run.
 
 ## Examples
 

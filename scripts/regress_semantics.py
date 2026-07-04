@@ -1105,6 +1105,59 @@ def run_custom_checks(python_bin: str) -> tuple[int, int]:
             print(f"[FAIL] learn_requires_bnm: rc={rc}")
             failed += 1
 
+        # 4g2) --gate-lemmas: familiarity trust region for compiled bias.
+        transfer = tmp / "gate_transfer.lp"
+        transfer.write_text(
+            "child(paolo;quinta;renzo).\n"
+            "blonde(paolo).\n-blonde(renzo).\n"
+            "looks_at(paolo,quinta).\nlooks_at(quinta,renzo).\n"
+            "answer_yes :- looks_at(X,Y), blonde(X), -blonde(Y).\n"
+            "-answer_yes :- not answer_yes.\nanswer_no :- -answer_yes.\n"
+            "#external blonde(quinta).\n#external -blonde(quinta).\n",
+            encoding="utf-8",
+        )
+        unfamiliar = tmp / "gate_unfamiliar.lp"
+        unfamiliar.write_text(
+            "% boundary pattern embedded in an unfamiliar larger structure\n"
+            "child(a;b;c;d;e;f).\n"
+            "blonde(a).\n-blonde(c).\n"
+            "looks_at(a,b).\nlooks_at(b,c).\n"
+            "looks_at(d,e).\nlooks_at(e,f).\nlooks_at(f,d).\n"
+            "blonde(d).\nblonde(e).\nblonde(f).\n"
+            "answer_yes :- looks_at(X,Y), blonde(X), -blonde(Y).\n"
+            "-answer_yes :- not answer_yes.\nanswer_no :- -answer_yes.\n"
+            "#external blonde(b).\n#external -blonde(b).\n",
+            encoding="utf-8",
+        )
+
+        def _gated_run(instance, gated):
+            cmd_g = [python_bin, str(KLINGO_ENTRYPOINT), "--bnm", "-k", "0", "--mode",
+                     "cautious", "--color", "never", "--use-lemmas", str(lemma_out)]
+            if gated:
+                cmd_g.append("--gate-lemmas")
+            cmd_g.append(str(instance))
+            rc_g, out_g, _err_g = run_command(cmd_g, ROOT)
+            atoms = {a.replace("[b]", "") for a in extract_final_answer_atoms(out_g)}
+            return rc_g, out_g, atoms
+
+        rc_a, out_a, atoms_a = _gated_run(transfer, gated=True)
+        rc_b, out_b, atoms_b = _gated_run(unfamiliar, gated=True)
+        rc_c, _out_c, atoms_c = _gated_run(unfamiliar, gated=False)
+        gate_ok = (
+            rc_a == 0 and "compiled bias applied" in out_a and "answer_yes" in atoms_a
+            and rc_b == 0 and "compiled bias disabled" in out_b and "answer_yes" not in atoms_b
+            and rc_c == 0 and "answer_yes" in atoms_c
+        )
+        if gate_ok:
+            print("[PASS] gate_lemmas_trust_region")
+            passed += 1
+        else:
+            print(
+                f"[FAIL] gate_lemmas_trust_region: familiar={sorted(atoms_a)}, "
+                f"unfamiliar_gated={sorted(atoms_b)}, unfamiliar_ungated={sorted(atoms_c)}"
+            )
+            failed += 1
+
         # 4h) --ilasp round-trip (skipped when the ILASP binary is absent).
         if shutil.which("ILASP") is None:
             print("[PASS] ilasp_bridge (skipped: ILASP binary not on PATH)")

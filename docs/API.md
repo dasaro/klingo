@@ -43,6 +43,12 @@ For ordinary use, the public CLI surface is just:
   alongside the input files. Certified conclusions appear as `[b]` presumptions at
   depth 0, remain overridable by deeper derivation, and leave the classical limit
   unchanged.
+- `--gate-lemmas` (requires `--use-lemmas`): apply the compiled bias only on
+  syntactically familiar instances. Lemma files carry provenance
+  Weisfeiler-Leman histograms; when the instance's name-blind structural
+  distance to every provenance instance exceeds the stored threshold, the
+  lemmas' `__ab` guards are asserted for the run (an Info line reports the
+  distance and verdict either way).
 - Convention: atoms named with a `__` prefix (lemma guards) are internal — they
   participate in solving but are never displayed.
 

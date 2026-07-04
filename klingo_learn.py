@@ -281,6 +281,7 @@ def learn_lemmas(paths, cautious_fn, out_path, probe_depths=(1, 2), report=print
     lines.append("% of the source program is unchanged.")
     for idx, lemma in enumerate(lemmas, 1):
         lines.append(rule_str(lemma, guard=f"not __ab_l{idx}"))
+    lines.append(provenance_line([list(paths)]))
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     report(f"wrote {len(lemmas)} lemma(s) to {out}")
     return lemmas
@@ -689,15 +690,127 @@ def ilasp_learn(instances, cautious_fn, out_path, probe_depths=(1, 2),
     lines.append("% by deeper derivation, retractable via the guard atom).")
     for idx, lemma in enumerate(lemmas, 1):
         lines.append(rule_str(lemma, guard=f"not __ab_i{idx}"))
+    # Provenance for --gate-lemmas: the instances whose gain licensed the
+    # hypothesis define its syntactic trust region.
+    gain_instances = [paths for paths, g in zip(instances, gains) if g]
+    lines.append(provenance_line(gain_instances or instances))
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     report(f"wrote {len(lemmas)} lemma(s) to {out}")
     return lemmas
 
 
+# ====================================================================
+# Familiarity gate (--gate-lemmas): a syntactic trust region for compiled
+# lemmas, measured by Weisfeiler-Leman label histograms (name-blind
+# "Hamming distance up to constant renaming") against the lemma file's
+# provenance instances.
+# ====================================================================
+
+import json
+
+WL_ROUNDS = 2
+GATE_SLACK = 1.5
+GATE_FALLBACK_TAU = 0.25
+PROVENANCE_PREFIX = "%__gate_provenance: "
+
+
+def wl_histogram_paths(paths):
+    """Name-blind structural signature of an instance (facts of all files):
+    2-round WL refinement over the constant graph, plus edge-label counts."""
+    facts = []
+    for path in paths:
+        _rules, instance_facts = dissect_instance(str(path))
+        facts.extend(instance_facts)
+    nodes, unary, edges = set(), {}, []
+    for _pos, name, args in facts:
+        consts = [a[1] for a in args]
+        nodes.update(consts)
+        if len(consts) == 1:
+            unary.setdefault(consts[0], []).append(name)
+        elif len(consts) == 2:
+            edges.append((name, consts[0], consts[1]))
+    label = {n: "|".join(sorted(unary.get(n, ["_"]))) for n in nodes}
+    for _ in range(WL_ROUNDS):
+        label = {
+            n: label[n]
+            + "(" + ",".join(sorted(f"{e}>{label[b]}" for e, a, b in edges if a == n))
+            + ";" + ",".join(sorted(f"{e}<{label[a]}" for e, a, b in edges if b == n))
+            + ")"
+            for n in nodes
+        }
+    hist = {}
+    for value in label.values():
+        hist[value] = hist.get(value, 0) + 1
+    for e, _a, _b in edges:
+        key = f"edge:{e}"
+        hist[key] = hist.get(key, 0) + 1
+    return hist
+
+
+def wl_distance(h1, h2):
+    total = sum(h1.values()) + sum(h2.values())
+    if total == 0:
+        return 0.0
+    keys = set(h1) | set(h2)
+    diff = sum(abs(h1.get(k, 0) - h2.get(k, 0)) for k in keys)
+    return diff / total
+
+
+def gate_threshold(hists):
+    """Corpus spread: largest nearest-neighbour distance inside the
+    provenance set, widened by a slack factor; a fixed fallback for
+    single-instance provenance."""
+    if len(hists) < 2:
+        return GATE_FALLBACK_TAU
+    spread = max(
+        min(wl_distance(h, other) for j, other in enumerate(hists) if j != i)
+        for i, h in enumerate(hists)
+    )
+    return min(1.0, spread * GATE_SLACK) or GATE_FALLBACK_TAU
+
+
+def provenance_line(instance_path_lists):
+    hists = [wl_histogram_paths(paths) for paths in instance_path_lists]
+    payload = {"tau": gate_threshold(hists), "histograms": hists}
+    return PROVENANCE_PREFIX + json.dumps(payload, sort_keys=True)
+
+
+def gate_guard_file(lemma_path, instance_paths):
+    """Decide whether the compiled bias applies to this instance. Returns
+    (info message, guard-file path or None). When the instance is
+    unfamiliar, the guard file asserts every __ab guard atom of the lemma
+    file, disabling the lemmas for this run."""
+    text = Path(lemma_path).read_text(encoding="utf-8", errors="ignore")
+    payload = None
+    for line in text.splitlines():
+        if line.startswith(PROVENANCE_PREFIX):
+            payload = json.loads(line[len(PROVENANCE_PREFIX):])
+            break
+    if payload is None:
+        return ("lemma file has no gate provenance; lemmas applied ungated", None)
+    instance_hist = wl_histogram_paths(instance_paths)
+    dist = min(wl_distance(instance_hist, h) for h in payload["histograms"])
+    tau = payload["tau"]
+    if dist <= tau:
+        return (f"familiarity d={dist:.3f} <= tau={tau:.3f}; compiled bias applied", None)
+    guards = sorted(set(re.findall(r"__ab_\w+", text)))
+    if not guards:
+        return (f"familiarity d={dist:.3f} > tau={tau:.3f}, but lemmas carry no guards", None)
+    with tempfile.NamedTemporaryFile(
+            "w", suffix=".lp", prefix="klingo_gate_", delete=False) as handle:
+        handle.write(f"% familiarity gate: d={dist:.3f} > tau={tau:.3f}\n")
+        handle.writelines(f"{g}.\n" for g in guards)
+        guard_path = handle.name
+    return (f"familiarity d={dist:.3f} > tau={tau:.3f}; compiled bias disabled", guard_path)
+
+
 __all__ = [
     "certify",
     "collect_definite_rules",
+    "gate_guard_file",
     "ilasp_learn",
     "learn_lemmas",
     "resolve",
+    "wl_distance",
+    "wl_histogram_paths",
 ]
