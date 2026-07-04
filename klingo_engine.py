@@ -21,7 +21,7 @@ from klingo_totality import (
     render_totality_rules,
 )
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 
 RESTART_STRATEGIES = {
     "luby": "L,60",
@@ -241,11 +241,23 @@ def build_arg_parser():
         ),
     )
     learn_group.add_argument(
+        "--ilasp",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "learn lemmas inductively with ILASP from the flip gains of the input files "
+            "(each positional file is a separate training instance), refine by "
+            "property-based CEGIS, write certified lemmas to PATH, then exit "
+            "(requires --bnm and the ILASP binary)"
+        ),
+    )
+    learn_group.add_argument(
         "--use-lemmas",
         type=str,
         default=None,
         metavar="PATH",
-        help="load a lemma file produced by --learn alongside the input files",
+        help="load a lemma file produced by --learn or --ilasp alongside the input files",
     )
 
     output_group = parser.add_argument_group("output")
@@ -599,6 +611,27 @@ def run(argv=None):
     if args.detect_max_depth:
         max_depth = detect_max_decision_depth(all_paths, args.solver_mode, restart_keys, totality_symbols)
         print(max_depth)
+        return 0
+
+    if args.ilasp:
+        if args.solver_mode != "bnm":
+            raise SystemExit("--ilasp requires --bnm (completion semantics defines the flip gain).")
+        if args.learn:
+            raise SystemExit("choose one of --learn / --ilasp")
+        from klingo_learn import ilasp_learn
+
+        instances = [
+            [path] + ([args.use_lemmas] if args.use_lemmas else [])
+            for path in args.files
+        ]
+
+        def instance_cautious_fn(paths, depth):
+            instance_totality = build_totality_universe(paths)
+            return _cautious_atoms_for_learning(paths, depth, restart_keys, instance_totality)
+
+        print("klingo version", __version__)
+        print("ILASP learning from", ", ".join(args.files))
+        ilasp_learn(instances, instance_cautious_fn, args.ilasp)
         return 0
 
     if args.learn:

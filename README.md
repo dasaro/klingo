@@ -1,4 +1,4 @@
-# k-lingo 2.4.0
+# k-lingo 2.5.0
 
 k-lingo is a Python CLI wrapper around clingo for depth-bounded reasoning modes:
 - `--3nd-star`: depth-bounded approximation of the stable-model semantics;
@@ -83,7 +83,12 @@ Compile depth-earned conclusions into depth-0 presumptions:
 depth 0 lacks), generalizes it by resolving the defining rules on bivalent
 literals, classically certifies each candidate schema against the
 totality-extended program, and writes the survivors as ab-guarded default
-lemmas. `--use-lemmas` loads such a file: certified conclusions then appear as
+lemmas. `--ilasp lemmas.lp inst1.lp inst2.lp ...` learns inductively instead
+(requires the [ILASP](https://ilasp.com) binary): each positional file is a
+training instance, per-instance flip gains become context-dependent examples,
+the mode bias is generated from the gained atom's dependency cone, and the
+hypothesis is refined by property-based CEGIS against the classical oracle
+until no sampled counterexample context remains. `--use-lemmas` loads such a file: certified conclusions then appear as
 `[b]` presumptions at depth 0, remain overridable by deeper derivation, are
 retractable by asserting the guard atom, and leave the classical limit
 unchanged. Guard atoms (`__`-prefixed) participate in solving but are never

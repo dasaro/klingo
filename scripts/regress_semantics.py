@@ -1105,6 +1105,43 @@ def run_custom_checks(python_bin: str) -> tuple[int, int]:
             print(f"[FAIL] learn_requires_bnm: rc={rc}")
             failed += 1
 
+        # 4h) --ilasp round-trip (skipped when the ILASP binary is absent).
+        if shutil.which("ILASP") is None:
+            print("[PASS] ilasp_bridge (skipped: ILASP binary not on PATH)")
+            passed += 1
+        else:
+            yes2 = tmp / "ilasp_yes2.lp"
+            yes2.write_text(
+                "child(carla;dana;elena).\n"
+                "blonde(carla).\n-blonde(elena).\n"
+                "looks_at(carla,dana).\nlooks_at(dana,elena).\n"
+                "answer_yes :- looks_at(X,Y), blonde(X), -blonde(Y).\n"
+                "-answer_yes :- not answer_yes.\nanswer_no :- -answer_yes.\n"
+                "#external blonde(dana).\n#external -blonde(dana).\n",
+                encoding="utf-8",
+            )
+            no1 = tmp / "ilasp_no1.lp"
+            no1.write_text(
+                "child(ugo;vera;walter).\n"
+                "-blonde(ugo).\n-blonde(walter).\n"
+                "looks_at(ugo,vera).\nlooks_at(vera,walter).\n"
+                "answer_yes :- looks_at(X,Y), blonde(X), -blonde(Y).\n"
+                "-answer_yes :- not answer_yes.\nanswer_no :- -answer_yes.\n"
+                "#external blonde(vera).\n#external -blonde(vera).\n",
+                encoding="utf-8",
+            )
+            ilasp_out = tmp / "ilasp_learned.lp"
+            cmd = [python_bin, str(KLINGO_ENTRYPOINT), "--bnm", "--ilasp", str(ilasp_out),
+                   str(children_lp), str(yes2), str(no1)]
+            rc, out, err = run_command(cmd, ROOT)
+            learned = ilasp_out.read_text(encoding="utf-8") if ilasp_out.exists() else ""
+            if rc == 0 and "answer_yes :-" in learned and "__ab_i" in learned:
+                print("[PASS] ilasp_bridge")
+                passed += 1
+            else:
+                print(f"[FAIL] ilasp_bridge: rc={rc}\n{(out + err)[-500:]}")
+                failed += 1
+
         # 5) Missing-file preflight should fail cleanly.
         missing = tmp / "does_not_exist.lp"
         cmd_missing = [python_bin, str(KLINGO_ENTRYPOINT), "--3nd-star", "-k", "1", str(missing)]

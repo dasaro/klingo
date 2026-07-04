@@ -34,9 +34,15 @@ For ordinary use, the public CLI surface is just:
 - `--learn <path>` (requires `--bnm`): compute the depth flip gain, generalize it by
   resolution on bivalent literals, certify each schema classically against the
   totality-extended program, write certified lemmas to `<path>`, then exit.
-- `--use-lemmas <path>`: load a lemma file produced by `--learn` alongside the input
-  files. Certified conclusions appear as `[b]` presumptions at depth 0, remain
-  overridable by deeper derivation, and leave the classical limit unchanged.
+- `--ilasp <path>` (requires `--bnm` and the ILASP binary on PATH): learn lemmas
+  inductively. Each positional file is a training instance; flip gains become
+  context-dependent examples; the hypothesis is refined by property-based CEGIS
+  against the classical oracle, then written to `<path>` in the same ab-guarded
+  register as `--learn`.
+- `--use-lemmas <path>`: load a lemma file produced by `--learn` or `--ilasp`
+  alongside the input files. Certified conclusions appear as `[b]` presumptions at
+  depth 0, remain overridable by deeper derivation, and leave the classical limit
+  unchanged.
 - Convention: atoms named with a `__` prefix (lemma guards) are internal — they
   participate in solving but are never displayed.
 

@@ -286,9 +286,418 @@ def learn_lemmas(paths, cautious_fn, out_path, probe_depths=(1, 2), report=print
     return lemmas
 
 
+# ====================================================================
+# ILASP bridge (--ilasp): inductive generation with certification-routed
+# CEGIS refinement over sampled contexts.
+# ====================================================================
+
+import random
+import re
+import shutil
+import subprocess
+import tempfile
+
+ILASP_BINARY = "ILASP"
+CEGIS_ROUNDS = 5
+CEGIS_SAMPLES = 60
+CEGIS_INDIVIDUALS = ("i1", "i2", "i3")
+
+_STRONG_NEG_RE = re.compile(r"(?<![\w\)])-(?=[a-z_])")
+
+
+def _bridge_text(text):
+    """Rewrite strong negation -p(...) to the bridge predicate np(...) so the
+    ILASP task stays classical-negation-free. Arithmetic minus (preceded by a
+    word character or ')') is left alone."""
+    return _STRONG_NEG_RE.sub("n", text)
+
+
+def _unbridge_lit(lit, bridged_preds):
+    positive, name, args = lit
+    if positive and name in bridged_preds:
+        return (False, name[1:], args)
+    return lit
+
+
+def _expand_ground_terms(node):
+    """Ground term -> list of ("const", text) alternatives (pools expand);
+    None if the term is non-ground or unsupported."""
+    if node.ast_type == clingo_ast.ASTType.SymbolicTerm:
+        return [("const", str(node.symbol))]
+    if node.ast_type == clingo_ast.ASTType.Pool:
+        out = []
+        for arg in node.arguments:
+            sub = _expand_ground_terms(arg)
+            if sub is None:
+                return None
+            out.extend(sub)
+        return out
+    return None
+
+
+def dissect_instance(path):
+    """Split an instance into (bridged rule texts, bridged ground fact
+    literals). Pooled facts (p(a;b;c).) are expanded; #show/#external
+    directives are skipped -- externals model open questions, which contexts
+    express by omission."""
+    import itertools
+
+    rules, facts = [], []
+
+    def fact_atoms(sym):
+        positive = True
+        if (sym.ast_type == clingo_ast.ASTType.UnaryOperation
+                and sym.operator_type == clingo_ast.UnaryOperator.Minus):
+            positive = False
+            sym = sym.argument
+        if sym.ast_type == clingo_ast.ASTType.Pool:
+            # symbol-level pool: child(anne;martha;jane) == Pool of atoms
+            expanded = []
+            for alternative in sym.arguments:
+                sub = fact_atoms(alternative)
+                if sub is None:
+                    return None
+                if not positive:
+                    sub = [(True, "n" + n if not n.startswith("n") else n, a)
+                           for _p, n, a in sub]
+                expanded.extend(sub)
+            return expanded
+        if sym.ast_type != clingo_ast.ASTType.Function:
+            return None
+        expansions = []
+        for arg in sym.arguments:
+            alt = _expand_ground_terms(arg)
+            if alt is None:
+                return None
+            expansions.append(alt)
+        name = sym.name if positive else "n" + sym.name
+        return [(True, name, combo) for combo in itertools.product(*expansions)] if expansions \
+            else [(True, name, ())]
+
+    def visit(stm):
+        if stm.ast_type != clingo_ast.ASTType.Rule:
+            return
+        head = stm.head
+        if (not stm.body
+                and head.ast_type == clingo_ast.ASTType.Literal
+                and head.atom.ast_type == clingo_ast.ASTType.SymbolicAtom):
+            expanded = fact_atoms(head.atom.symbol)
+            if expanded is not None:
+                facts.extend(expanded)
+                return
+        rules.append(_bridge_text(str(stm)))
+
+    clingo_ast.parse_files([path], visit)
+    return rules, facts
+
+
+def _collect_body_atoms(paths):
+    """Head predicate -> set of (bridged body predicate, arity), tolerant of
+    NAF bodies (used for dependency-cone bias generation)."""
+    cone = {}
+
+    def visit(stm):
+        if stm.ast_type != clingo_ast.ASTType.Rule or not stm.body:
+            return
+        head = stm.head
+        if (head.ast_type != clingo_ast.ASTType.Literal
+                or head.atom.ast_type != clingo_ast.ASTType.SymbolicAtom):
+            return
+        try:
+            h = _atom(head.atom.symbol)
+        except ValueError:
+            return
+        hname = h[1] if h[0] else "n" + h[1]
+        bucket = cone.setdefault(hname, set())
+        for lit in stm.body:
+            if (lit.ast_type != clingo_ast.ASTType.Literal
+                    or lit.atom.ast_type != clingo_ast.ASTType.SymbolicAtom):
+                continue
+            try:
+                b = _atom(lit.atom.symbol)
+            except ValueError:
+                continue
+            bucket.add((b[1] if b[0] else "n" + b[1], len(b[2])))
+
+    clingo_ast.parse_files(paths, visit)
+    return cone
+
+
+def _cone_bias(cone, target, max_def_body):
+    preds, frontier = set(), {target}
+    while frontier:
+        pred = frontier.pop()
+        for body_pred, arity in cone.get(pred, ()):
+            if body_pred != target and (body_pred, arity) not in preds:
+                preds.add((body_pred, arity))
+                frontier.add(body_pred)
+    lines = [f"#modeh({target})."]
+    for name, arity in sorted(preds):
+        vars_ = ", ".join("var(p)" for _ in range(arity)) if arity else ""
+        atom = f"{name}({vars_})" if arity else name
+        lines.append(f"#modeb(2, {atom}, (positive)).")
+    lines.append("#maxv(3).")
+    return lines, preds, max_def_body + 1
+
+
+def _ctx_text(facts):
+    return " ".join(lit_str(lit) + "." for lit in sorted(facts))
+
+
+def _parse_learned_rules(output, bridged_preds):
+    rules = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("%") or line == "UNSATISFIABLE":
+            continue
+        if line.startswith(":-"):
+            continue  # learned constraints are not lemma material
+        body_txt = ""
+        head_txt = line.rstrip(".")
+        if ":-" in line:
+            head_txt, body_txt = line.rstrip(".").split(":-", 1)
+
+        def parse_atom(text):
+            text = text.strip()
+            if "(" in text:
+                name, rest = text.split("(", 1)
+                args = tuple(
+                    ("var", a.strip()) if a.strip()[0].isupper() else ("const", a.strip())
+                    for a in rest.rsplit(")", 1)[0].split(",")
+                )
+            else:
+                name, args = text, ()
+            return _unbridge_lit((True, name.strip(), args), bridged_preds)
+
+        head = parse_atom(head_txt)
+        # ILASP separates body literals with ';' (commas only inside argument lists)
+        body = tuple(parse_atom(b) for b in body_txt.split(";") if b.strip())
+        rules.append((head, body))
+    return rules
+
+
+def _entailed_in_context(atom_lit, rule_texts_orig, ctx_facts, bridged_preds):
+    """Classical oracle: does P_ctx + Tot entail the atom? Returns None for a
+    classically inconsistent context (which would entail everything
+    vacuously and must not become an example)."""
+    orig_facts = [_unbridge_lit(f, bridged_preds) for f in ctx_facts]
+    program = "\n".join(rule_texts_orig + [lit_str(f) + "." for f in orig_facts])
+    with tempfile.NamedTemporaryFile("w", suffix=".lp", delete=False) as handle:
+        handle.write(program)
+        tmp_path = handle.name
+    try:
+        tot = build_totality_universe([tmp_path])
+        sat_probe = clingo.Control(["1", "-Wno-atom-undefined"])
+        sat_probe.add("base", [], program + "\n" + "\n".join(render_totality_rules(tot)))
+        sat_probe.ground([("base", [])])
+        if str(sat_probe.solve()) == "UNSAT":
+            return None
+        return certify((atom_lit, ()), [tmp_path], tot)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
+def _predicted_in_context(atom_name, background_bridged, hypothesis_texts, ctx_facts):
+    """Does the learned program cautiously conclude the atom in this context?"""
+    program = "\n".join(background_bridged + hypothesis_texts) + "\n" + _ctx_text(ctx_facts)
+    control = clingo.Control(["0", "-Wno-atom-undefined"])
+    control.add("base", [], program)
+    control.ground([("base", [])])
+    seen = {"any": False, "cautious": True}
+
+    def on_model(model):
+        seen["any"] = True
+        if not any(str(sym) == atom_name for sym in model.symbols(atoms=True)):
+            seen["cautious"] = False
+
+    control.solve(on_model=on_model)
+    return seen["any"] and seen["cautious"]
+
+
+def _sample_context(rng, unary_preds, binary_preds):
+    facts = []
+    for name, _arity in binary_preds:
+        for a in CEGIS_INDIVIDUALS:
+            for b in CEGIS_INDIVIDUALS:
+                if a != b and rng.random() < 0.35:
+                    facts.append((True, name, (("const", a), ("const", b))))
+    # Complementary unary pairs (p / np, i.e. p / -p in the original
+    # vocabulary) are sampled coherently: each individual gets the positive
+    # phase, the negative phase, or stays unknown -- never both.
+    names = {n for n, _a in unary_preds}
+    paired = {n for n in names if "n" + n in names}
+    handled = paired | {"n" + n for n in paired}
+    for base in sorted(paired):
+        for a in CEGIS_INDIVIDUALS:
+            roll = rng.random()
+            if roll < 0.35:
+                facts.append((True, base, (("const", a),)))
+            elif roll < 0.70:
+                facts.append((True, "n" + base, (("const", a),)))
+    for name, _arity in unary_preds:
+        if name in handled:
+            continue
+        for a in CEGIS_INDIVIDUALS:
+            if rng.random() < 0.4:
+                facts.append((True, name, (("const", a),)))
+    return facts
+
+
+def ilasp_learn(instances, cautious_fn, out_path, probe_depths=(1, 2),
+                report=print, seed=0):
+    """ILASP-backed learning. `instances` is a list of path-lists (one list
+    per training instance); `cautious_fn(paths, k)` is the engine's cautious
+    oracle. Gains become context-dependent examples, ILASP proposes, a
+    property-based CEGIS loop against the classical oracle refines, and
+    certified survivors are compiled as ab-guarded defaults."""
+    if shutil.which(ILASP_BINARY) is None:
+        raise SystemExit(f"--ilasp requires the {ILASP_BINARY} binary on PATH (see ilasp.com).")
+
+    # -- per-instance flip gains -------------------------------------------
+    gains, contexts = [], []
+    background_bridged, rule_texts_orig = None, None
+    for paths in instances:
+        rules_b, facts_b = dissect_instance(paths[0])
+        for extra in paths[1:]:
+            extra_rules, extra_facts = dissect_instance(extra)
+            rules_b += extra_rules
+            facts_b += extra_facts
+        if background_bridged is None:
+            background_bridged = rules_b
+            rule_texts_orig = []
+
+            def collect_orig(stm):
+                if stm.ast_type == clingo_ast.ASTType.Rule and stm.body:
+                    rule_texts_orig.append(str(stm))
+
+            clingo_ast.parse_files([paths[0]], collect_orig)
+        contexts.append(facts_b)
+        baseline = cautious_fn(paths, 0)
+        gain = set()
+        for k in probe_depths:
+            gain = {a for a in cautious_fn(paths, k) - baseline if not a.startswith("-")}
+            if gain:
+                break
+        gains.append(gain)
+        report(f"instance {Path(paths[0]).name}: gain = {' '.join(sorted(gain)) or '(none)'}")
+
+    target_atoms = sorted({a for g in gains for a in g})
+    if not target_atoms:
+        report("no flip gain across instances; nothing to learn")
+        return []
+    target = target_atoms[0].split("(")[0]
+    if len({a.split("(")[0] for a in target_atoms}) > 1:
+        report(f"multiple gained predicates; learning the first: {target}")
+
+    # Bridge predicates are those _bridge_text introduced: predicates that
+    # occur strong-negated anywhere in the original instance sources.
+    source_text = "\n".join(
+        Path(p).read_text(encoding="utf-8", errors="ignore")
+        for paths in instances for p in paths
+    )
+    strong = set(re.findall(r"(?<![\w\)])-([a-z_]\w*)", source_text))
+    bridged_preds = {"n" + s for s in strong}
+
+    cone = _collect_body_atoms([instances[0][0]])
+    defs_len = [len(r[1]) for r in collect_definite_rules([instances[0][0]])
+                if r[0][1] == target] or [3]
+    bias_lines, cone_preds, max_len = _cone_bias(cone, target, max(defs_len))
+    unary = [(n, a) for n, a in cone_preds if a == 1]
+    binary = [(n, a) for n, a in cone_preds if a == 2]
+
+    # -- assemble base examples --------------------------------------------
+    example_lines = []
+    for idx, (gain, ctx) in enumerate(zip(gains, contexts)):
+        ctx_txt = _ctx_text(ctx)
+        if target_atoms[0] in {a for a in gain} or any(a.split("(")[0] == target for a in gain):
+            example_lines.append(f"#neg(g{idx}, {{}}, {{{target}}}, {{ {ctx_txt} }}).")
+            example_lines.append(f"#pos(s{idx}, {{}}, {{}}, {{ {ctx_txt} }}).")
+        else:
+            example_lines.append(f"#pos(o{idx}, {{}}, {{{target}}}, {{ {ctx_txt} }}).")
+
+    rng = random.Random(seed)
+    lemmas = []
+    for rnd in range(1, CEGIS_ROUNDS + 1):
+        task = "\n".join(background_bridged + bias_lines + example_lines)
+        output = None
+        for attempt_len in (max_len, max_len + 1):
+            with tempfile.NamedTemporaryFile("w", suffix=".las", delete=False) as handle:
+                handle.write(task)
+                task_path = handle.name
+            try:
+                proc = subprocess.run(
+                    [ILASP_BINARY, "--version=4", f"-ml={attempt_len}", task_path],
+                    capture_output=True, text=True, timeout=300)
+            finally:
+                Path(task_path).unlink(missing_ok=True)
+            output = proc.stdout
+            if proc.returncode != 0 or (not output.strip() and proc.stderr.strip()):
+                detail = (proc.stderr or proc.stdout).strip().splitlines()
+                raise SystemExit(f"ILASP failed: {detail[0] if detail else 'no output'}")
+            if "UNSATISFIABLE" not in output:
+                break
+            report(f"[round {rnd}] unsatisfiable at -ml={attempt_len}; "
+                   + ("retrying with a longer rule budget" if attempt_len == max_len else "giving up"))
+        if "UNSATISFIABLE" in output:
+            debug_path = Path(out_path).with_suffix(".failed.las")
+            debug_path.write_text(task, encoding="utf-8")
+            report(f"final task preserved at {debug_path}")
+            return []
+        hypothesis = _parse_learned_rules(output, bridged_preds)
+        if not hypothesis:
+            raise SystemExit(
+                "ILASP returned no parsable hypothesis; raw output head: "
+                + " / ".join(output.strip().splitlines()[:3])
+            )
+        hyp_bridged = [_bridge_text(rule_str(r)) for r in hypothesis]
+        report(f"[round {rnd}] hypothesis: " + " | ".join(rule_str(r) for r in hypothesis))
+
+        # property-based CEGIS: compare prediction vs classical oracle
+        discrepancies = 0
+        for _ in range(CEGIS_SAMPLES):
+            ctx = _sample_context(rng, unary, binary)
+            predicted = _predicted_in_context(target, background_bridged, hyp_bridged, ctx)
+            entailed = _entailed_in_context((True, target, ()), rule_texts_orig, ctx, bridged_preds)
+            if entailed is None:
+                continue  # classically inconsistent context: no example value
+            if predicted and not entailed:
+                example_lines.append(f"#pos(c{rnd}_{discrepancies}, {{}}, {{{target}}}, {{ {_ctx_text(ctx)} }}).")
+                discrepancies += 1
+            elif entailed and not predicted:
+                example_lines.append(f"#neg(d{rnd}_{discrepancies}, {{}}, {{{target}}}, {{ {_ctx_text(ctx)} }}).")
+                example_lines.append(f"#pos(e{rnd}_{discrepancies}, {{}}, {{}}, {{ {_ctx_text(ctx)} }}).")
+                discrepancies += 1
+            if discrepancies >= 3:
+                break
+        if discrepancies:
+            report(f"[round {rnd}] {discrepancies} counterexample context(s) found; refining")
+            continue
+        report(f"[round {rnd}] no counterexamples in {CEGIS_SAMPLES} sampled contexts")
+        lemmas = hypothesis
+        break
+
+    if not lemmas:
+        report("CEGIS budget exhausted without a stable hypothesis")
+        return []
+
+    # -- emit (same ab-guarded register as --learn) -------------------------
+    out = Path(out_path)
+    lines = ["% Certified-schema lemma file (generated by klingo --ilasp)."]
+    lines.append(f"% Training instances: {', '.join(Path(p[0]).name for p in instances)}")
+    lines.append(f"% Hypothesis stable after property-based CEGIS ({CEGIS_SAMPLES} contexts/round, seed {seed}).")
+    lines.append("% Register: ab-guarded default (depth-0 [b] presumption, overridable")
+    lines.append("% by deeper derivation, retractable via the guard atom).")
+    for idx, lemma in enumerate(lemmas, 1):
+        lines.append(rule_str(lemma, guard=f"not __ab_i{idx}"))
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report(f"wrote {len(lemmas)} lemma(s) to {out}")
+    return lemmas
+
+
 __all__ = [
     "certify",
     "collect_definite_rules",
+    "ilasp_learn",
     "learn_lemmas",
     "resolve",
 ]

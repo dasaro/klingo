@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.5.0
+
+- **Added inductive learning via ILASP** (`--ilasp PATH`, requires `--bnm` and the ILASP
+  binary): each positional file is a separate training instance; per-instance flip gains
+  become context-dependent ILASP examples (cautious entailment encoded as
+  exclusion-negatives plus satisfiability witnesses, non-entailment as exclusion-positives);
+  the mode bias is auto-generated from the gained atom's dependency cone; and hypotheses
+  are refined by property-based CEGIS — sampled coherent contexts are checked against the
+  classical oracle, discrepancies feed back as examples until a stable hypothesis survives.
+  Survivors are compiled in the same ab-guarded default register as `--learn`.
+- Instance dissection expands pooled facts (`p(a;b;c).`), skips classically inconsistent
+  sampled contexts, and retries ILASP once with a longer rule budget on unsatisfiability
+  (preserving the failing task for inspection).
+
 ## 2.4.0
 
 - **Added certified-schema learning** (`--learn PATH`, requires `--bnm`, and `--use-lemmas PATH`):
