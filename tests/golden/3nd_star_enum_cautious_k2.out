@@ -1,0 +1,13 @@
+klingo version <VERSION>
+Reading from Examples/kernel/enum_modes.lp
+Solving...
+SATISFIABLE
+Consequences [0;0]
+Answer: (Time: <TIME>)
+
+Models       : 7
+  Cautious   : yes
+Consequences : 0
+Calls        : 8
+Time         : <TIME>
+CPU Time     : <TIME>

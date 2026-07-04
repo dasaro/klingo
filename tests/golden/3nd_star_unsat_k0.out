@@ -1,0 +1,8 @@
+klingo version <VERSION>
+Reading from Examples/kernel/unsat.lp
+Solving...
+UNSATISFIABLE
+Models       : 0
+Calls        : 1
+Time         : <TIME>
+CPU Time     : <TIME>

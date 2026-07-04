@@ -1,0 +1,10 @@
+klingo version <VERSION>
+Reading from Examples/kernel/bnm_children_flip.lp
+Solving...
+Answer: 1
+answer_yes blonde(anne) -blonde(jane)
+SATISFIABLE
+Models       : 1+
+Calls        : 1
+Time         : <TIME>
+CPU Time     : <TIME>

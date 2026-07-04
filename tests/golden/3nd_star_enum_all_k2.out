@@ -1,0 +1,23 @@
+klingo version <VERSION>
+Reading from Examples/kernel/enum_modes.lp
+Solving...
+Answer: 1
+?a d
+Answer: 2
+c
+Answer: 3
+a c
+Answer: 4
+b d
+Answer: 5
+a b d
+Answer: 6
+b c
+Answer: 7
+a b c
+SATISFIABLE
+Models       : 7
+Calls        : 8
+Time         : <TIME>
+CPU Time     : <TIME>
+Legend: ?atom = undefined

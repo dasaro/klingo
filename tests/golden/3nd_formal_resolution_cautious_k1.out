@@ -1,0 +1,14 @@
+klingo version <VERSION>
+Reading from Examples/kernel/3nd_formal_resolution.lp
+Solving...
+SATISFIABLE
+Consequences [0;1]
+Answer: (Time: <TIME>)
+b
+
+Models       : 2
+  Cautious   : yes
+Consequences : 1
+Calls        : 3
+Time         : <TIME>
+CPU Time     : <TIME>

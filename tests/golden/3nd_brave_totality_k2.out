@@ -1,0 +1,14 @@
+klingo version <VERSION>
+Reading from Examples/kernel/bnm_totality.lp
+Solving...
+SATISFIABLE
+Consequences [4;4]
+Answer: (Time: <TIME>)
+-p(a) -p(b) p(a) p(b)
+
+Models       : 3
+  Brave      : yes
+Consequences : 4
+Calls        : 4
+Time         : <TIME>
+CPU Time     : <TIME>

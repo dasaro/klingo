@@ -1,0 +1,14 @@
+klingo version <VERSION>
+Reading from Examples/kernel/enum_modes.lp
+Solving...
+SATISFIABLE
+Consequences [4;4]
+Answer: (Time: <TIME>)
+a b c d
+
+Models       : 7
+  Brave      : yes
+Consequences : 4
+Calls        : 8
+Time         : <TIME>
+CPU Time     : <TIME>
