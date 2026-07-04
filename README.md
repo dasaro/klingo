@@ -1,4 +1,4 @@
-# k-lingo 2.3.0
+# k-lingo 2.4.0
 
 k-lingo is a Python CLI wrapper around clingo for depth-bounded reasoning modes:
 - `--3nd-star`: depth-bounded approximation of the stable-model semantics;
@@ -69,6 +69,25 @@ Normal use is intentionally small:
 
 Inspection flags such as `--detect-max-depth`, `--dump-preprocessed`, `--print-config`, and
 `--emit-bnm-trace` are available, but they are not needed for ordinary runs.
+
+## Learning
+
+Compile depth-earned conclusions into depth-0 presumptions:
+
+```sh
+./.venv/bin/python klingo --bnm --learn lemmas.lp Examples/kernel/bnm_children_open.lp
+./.venv/bin/python klingo --bnm -k 0 --use-lemmas lemmas.lp Examples/kernel/bnm_children_open.lp
+```
+
+`--learn` computes the depth flip gain (what deeper reasoning establishes that
+depth 0 lacks), generalizes it by resolving the defining rules on bivalent
+literals, classically certifies each candidate schema against the
+totality-extended program, and writes the survivors as ab-guarded default
+lemmas. `--use-lemmas` loads such a file: certified conclusions then appear as
+`[b]` presumptions at depth 0, remain overridable by deeper derivation, are
+retractable by asserting the guard atom, and leave the classical limit
+unchanged. Guard atoms (`__`-prefixed) participate in solving but are never
+displayed.
 
 ## Examples
 

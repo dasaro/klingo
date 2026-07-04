@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.4.0
+
+- **Added certified-schema learning** (`--learn PATH`, requires `--bnm`, and `--use-lemmas PATH`):
+  - `--learn` computes the depth flip gain, generalizes it by resolution on complementary
+    bivalent body literals, certifies each candidate classically against the
+    totality-extended program (UNSAT probe over all groundings), and writes certified
+    schemas as ab-guarded default lemmas (new module `klingo_learn.py`);
+  - resolution iterates only through shrinking lemmas, so full case enumerations compile
+    to their bare theorems while chain families stay bounded;
+  - `--use-lemmas` loads a lemma file: certified conclusions appear as `[b]` presumptions
+    at depth 0, are overridable by deeper derivation and retractable via the guard atom,
+    and the classical limit of the source program is unchanged.
+- Atoms with a double-underscore prefix (e.g. lemma guards) are treated as internal:
+  they take part in solving but are hidden from per-model output and summaries.
+
 ## 2.3.0
 
 - **Redefined `--bnm` branch completion as supervaluational stable completion** (semantic change):

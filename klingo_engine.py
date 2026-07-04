@@ -21,7 +21,7 @@ from klingo_totality import (
     render_totality_rules,
 )
 
-__version__ = "2.3.0"
+__version__ = "2.4.0"
 
 RESTART_STRATEGIES = {
     "luby": "L,60",
@@ -229,6 +229,25 @@ def build_arg_parser():
         help="stop after N valuations (0 = no limit)",
     )
 
+    learn_group = parser.add_argument_group("learning")
+    learn_group.add_argument(
+        "--learn",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help=(
+            "learn certified schemas from the depth flip gain, write them to PATH "
+            "as ab-guarded default lemmas, then exit (requires --bnm)"
+        ),
+    )
+    learn_group.add_argument(
+        "--use-lemmas",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="load a lemma file produced by --learn alongside the input files",
+    )
+
     output_group = parser.add_argument_group("output")
     output_group.add_argument(
         "-o",
@@ -401,6 +420,7 @@ def print_run_config(args, totality_symbols, show_filter):
 
 
 def filter_summary_atoms(summary_atoms, atom_universe, show_filter):
+    summary_atoms = {atom for atom in summary_atoms if not _is_internal_atom(atom)}
     if not show_filter or not show_filter.has_directives or show_filter.disabled:
         return sorted(summary_atoms)
     valuation = []
@@ -469,6 +489,53 @@ def detect_max_decision_depth(paths, solver_mode, restart_keys, totality_symbols
     return max_depth
 
 
+def _is_internal_atom(atom):
+    """Atoms named with a double-underscore prefix (e.g. lemma guards) are
+    internal bookkeeping: they take part in solving but are never displayed."""
+    return atom.startswith("__") or atom.startswith("-__")
+
+
+def _cautious_atoms_for_learning(paths, depth, restart_keys, totality_symbols):
+    """In-process cautious --bnm consequences at the given depth (true atoms
+    shared by every completed branch). Used by --learn."""
+    seen = set()
+    blockers = []
+    restart_cycle = cycle(restart_keys)
+    intersection = None
+    while True:
+        strategy = next(restart_cycle)
+        propagator, _solve_result = solve_core_iteration(
+            paths, strategy, depth, blockers, "bnm", totality_symbols
+        )
+        if propagator.exceeded_depth:
+            raise SystemExit("Search exceeded k-depth; aborting.")
+        if not propagator.found:
+            break
+        signature = valuation_signature(propagator.valuation)
+        if signature in seen:
+            block = valuation_block_constraint(propagator.valuation)
+            if not block or block in blockers:
+                break
+            blockers.append(block)
+            continue
+        seen.add(signature)
+        completed, _bnm_atoms = apply_default_completion(
+            propagator.valuation,
+            paths,
+            depth=depth,
+            program_id=",".join(paths),
+            totality_symbols=totality_symbols,
+        )
+        true_atoms = {atom for atom, value in completed if value == "1"}
+        intersection = set(true_atoms) if intersection is None else (intersection & true_atoms)
+        block = valuation_block_constraint(propagator.valuation)
+        if not block:
+            break
+        if block not in blockers:
+            blockers.append(block)
+    return intersection or set()
+
+
 def solve_core_iteration(
     paths,
     restart_key,
@@ -510,6 +577,8 @@ def run(argv=None):
 
     raw_args = sys.argv[1:] if argv is None else list(argv)
     all_paths = list(args.files)
+    if args.use_lemmas:
+        all_paths.append(args.use_lemmas)
     validate_input_files(all_paths)
     validate_program_syntax(all_paths)
 
@@ -530,6 +599,25 @@ def run(argv=None):
     if args.detect_max_depth:
         max_depth = detect_max_decision_depth(all_paths, args.solver_mode, restart_keys, totality_symbols)
         print(max_depth)
+        return 0
+
+    if args.learn:
+        if args.solver_mode != "bnm":
+            raise SystemExit("--learn requires --bnm (completion semantics defines the flip gain).")
+        from klingo_learn import learn_lemmas
+
+        def cautious_fn(depth):
+            return _cautious_atoms_for_learning(all_paths, depth, restart_keys, totality_symbols)
+
+        print("klingo version", __version__)
+        print("Learning from", ", ".join(all_paths))
+        probe_upper = max(2, args.depth)
+        learn_lemmas(
+            all_paths,
+            cautious_fn,
+            args.learn,
+            probe_depths=tuple(range(1, probe_upper + 1)),
+        )
         return 0
 
     forced_models_default, show_models_warning = prepare_models_setting(args, raw_args)
@@ -671,6 +759,7 @@ def run(argv=None):
             filtered = filter_valuation_by_show(completed_valuation, show_filter)
         else:
             filtered = list(completed_valuation)
+        filtered = [(atom, value) for atom, value in filtered if not _is_internal_atom(atom)]
 
         true_atoms = {atom for atom, value in completed_valuation if value == "1"}
         if args.mode == "all":

@@ -1054,6 +1054,57 @@ def run_custom_checks(python_bin: str) -> tuple[int, int]:
             )
             failed += 1
 
+        # 4g) --learn / --use-lemmas: certified-schema learning round-trip.
+        children_lp = ROOT / "Examples" / "kernel" / "bnm_children_open.lp"
+        lemma_out = tmp / "children_learned.lp"
+        cmd = [python_bin, str(KLINGO_ENTRYPOINT), "--bnm", "--learn", str(lemma_out), str(children_lp)]
+        rc, out, err = run_command(cmd, ROOT)
+        lemma_text = lemma_out.read_text(encoding="utf-8") if lemma_out.exists() else ""
+        if rc != 0 or "answer_yes :-" not in lemma_text or "__ab_l" not in lemma_text:
+            print(f"[FAIL] learn_children_schema: rc={rc}, lemma file:\n{lemma_text[:400]}")
+            failed += 1
+        else:
+            print("[PASS] learn_children_schema")
+            passed += 1
+
+        def _cautious_set(extra_args):
+            cmd_c = [python_bin, str(KLINGO_ENTRYPOINT), "--bnm", "--mode", "cautious",
+                     "--color", "never"] + extra_args + [str(children_lp)]
+            rc_c, out_c, _err_c = run_command(cmd_c, ROOT)
+            if rc_c != 0:
+                return None
+            return {a.replace("[b]", "") for a in extract_final_answer_atoms(out_c)}
+
+        trained_k0 = _cautious_set(["-k", "0", "--use-lemmas", str(lemma_out)])
+        if (trained_k0 and "answer_yes" in trained_k0 and "answer_no" not in trained_k0
+                and not any("__ab" in a for a in trained_k0)):
+            print("[PASS] use_lemmas_depth0_presumption")
+            passed += 1
+        else:
+            print(f"[FAIL] use_lemmas_depth0_presumption: got {sorted(trained_k0 or [])}")
+            failed += 1
+
+        untrained_k1 = _cautious_set(["-k", "1"])
+        trained_k1 = _cautious_set(["-k", "1", "--use-lemmas", str(lemma_out)])
+        if untrained_k1 is not None and untrained_k1 == trained_k1:
+            print("[PASS] use_lemmas_classical_limit_unchanged")
+            passed += 1
+        else:
+            print(
+                f"[FAIL] use_lemmas_classical_limit_unchanged: untrained={sorted(untrained_k1 or [])}, "
+                f"trained={sorted(trained_k1 or [])}"
+            )
+            failed += 1
+
+        cmd = [python_bin, str(KLINGO_ENTRYPOINT), "--learn", str(tmp / "x.lp"), str(children_lp)]
+        rc, out, err = run_command(cmd, ROOT)
+        if rc != 0 and "--learn requires --bnm" in (out + err):
+            print("[PASS] learn_requires_bnm")
+            passed += 1
+        else:
+            print(f"[FAIL] learn_requires_bnm: rc={rc}")
+            failed += 1
+
         # 5) Missing-file preflight should fail cleanly.
         missing = tmp / "does_not_exist.lp"
         cmd_missing = [python_bin, str(KLINGO_ENTRYPOINT), "--3nd-star", "-k", "1", str(missing)]
